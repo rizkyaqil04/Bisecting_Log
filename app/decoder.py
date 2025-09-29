@@ -5,7 +5,6 @@ import codecs
 import argparse
 import urllib.parse
 import base64
-import unicodedata
 import pandas as pd
 from bot import is_valid_bot
 
@@ -208,27 +207,12 @@ def parse_dec_file_to_dataframe(in_path):
 
             if is_valid_bot(fields['ip'], fields['user_agent']):
                 continue  # Skip valid bot    
-
+            
             fields['no'] = no
             records.append(fields)
 
     df = pd.DataFrame(records)
-
-    # --- Normalisasi dan perbaikan kolom url ---
-    def normalize_url(u):
-        if pd.isna(u):
-            return '/'
-        # normalisasi bentuk unicode agar fullwidth slash, dsb jadi normal
-        norm = unicodedata.normalize('NFKC', str(u)).strip()
-        if norm == '' or norm == '/':
-            return '/'
-        return norm
-
-    df['url'] = df['url'].apply(normalize_url)
-
-    # parsing kolom lain seperti semula
-    df['time'] = pd.to_datetime(df['time'], format='%d/%b/%Y:%H:%M:%S %z',
-                                errors='coerce', utc=True)
+    df['time'] = pd.to_datetime(df['time'], format='%d/%b/%Y:%H:%M:%S %z', errors='coerce', utc=True)
     df['status'] = df['status'].astype(int)
     df['size'] = df['size'].astype(int)
     
