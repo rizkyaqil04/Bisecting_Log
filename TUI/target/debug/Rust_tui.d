@@ -1,1 +1,0 @@
-/home/foxcat/Projects/Bisecting_Log/Bisecting_Log/TUI/target/debug/Rust_tui: /home/foxcat/Projects/Bisecting_Log/Bisecting_Log/TUI/src/main.rs /home/foxcat/Projects/Bisecting_Log/Bisecting_Log/TUI/src/state.rs
