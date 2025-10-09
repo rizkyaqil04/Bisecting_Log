@@ -1,34 +1,3 @@
-# ---
-# jupyter:
-#   jupytext:
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.17.3
-#   kernelspec:
-#     display_name: skripsi
-#     language: python
-#     name: python3
-# ---
-
-# %% [markdown]
-# # Notebook: Sistem Pendukung Investigasi Serangan Siber Berdasarkan Log Server Web dan Bisecting K-Means
-#
-# Notebook ini membangun sistem analisis log server web untuk investigasi serangan siber, dengan pipeline:
-# 1. Import library & setup lingkungan
-# 2. Membaca & membersihkan data log
-# 3. Ekstraksi & tokenisasi URL
-# 4. Pembuatan embedding URL dengan BERT
-# 5. Clustering URL menggunakan Bisecting K-Means
-# 6. Visualisasi & analisis hasil cluster
-
-# %% [markdown]
-# ## 1. Import Library dan Setup Lingkungan
-#
-# Impor semua library yang diperlukan (pandas, numpy, torch, transformers, sklearn, dsb). Lakukan setup device (CPU/GPU) dan inisialisasi model/tokenizer BERT.
-
-# %%
 import os
 import re
 import sys
@@ -63,37 +32,16 @@ input_log_file = "../inputs/sample.log"
 output_dir = "../outputs/sample.csv"
 num_clusters = 8
 
-# %% [markdown]
 # ## 2. Membaca dan Membersihkan Data Log
-#
 # Baca file log hasil decoding (menggunakan fungsi dari `decoder.py`), filter bot, dan parsing menjadi DataFrame yang siap diolah.
 
-# %%
 # Load and process log file
 df = parse_dec_file_to_dataframe(input_log_file)
 print(f"✅ Loaded {len(df)} rows from {input_log_file}")
 df.head()
 
-
-# %% [markdown]
 # ## 3. Ekstraksi dan Tokenisasi Fitur
-#
 # Ekstrak fitur dari log, lakukan masking angka pada fitur URL, kategorisasi fitur status, dan tokenisasi path serta query string menjadi token-token teks.
-
-# %%
-# def extract_unique_urls(df):
-#     """
-#     Extract unique URLs from the dataframe and mask numeric values.
-
-#     Args:
-#         df (pd.DataFrame): Dataframe containing a 'url' column.
-
-#     Returns:
-#         list: Unique URLs where numeric sequences are replaced with <NUM>.
-#     """
-#     result = df['url'].unique()
-#     result = [re.sub(r'\d+', '<NUM>', url) for url in result]
-#     return list(dict.fromkeys(result))
 
 def mask_numbers(url):
     """
@@ -106,8 +54,6 @@ def mask_numbers(url):
         str: The URL string where all numeric sequences are replaced with <NUM>.
     """
     return re.sub(r'\d+', '<NUM>', url)
-
-
 
 def split_url_tokens(url):
     """
@@ -140,7 +86,6 @@ def tokenize_user_agent(ua):
     tokens = re.split(r"[ /;()]+", ua)
     return [tok for tok in tokens if tok]
 
-
 def categorize_status(code):
     """
     Categorize HTTP status codes into standard ranges.
@@ -164,7 +109,7 @@ def categorize_status(code):
 
 # --- Tokenisasi ---
 
-# tokenized_urls = [" ".join(split_url_tokens(url)) for url in unique_urls]
+# URL
 tokenized_urls = [" ".join(split_url_tokens(mask_numbers(url))) for url in df['url']]
 print("\n✅ tokenized_urls (head & tail)")
 pprint(tokenized_urls[:5] + ["..."] + tokenized_urls[-5:])
@@ -189,14 +134,8 @@ ua_tokens = [" ".join(tokenize_user_agent(ua)) for ua in df['user_agent']]
 print("\n✅ user_agent tokens (head)")
 pprint(ua_tokens[:3])
 
-
-# %% [markdown]
 # ## 4. Vektorisasi Fitur
-#
 # Konversi token-token URL menjadi embedding vektor menggunakan berbagai metode, encoding metode dan status, normalisasi size, dan vektorisasi tfidf untuk user-agent.
-
-# %%
-## 4. Embedding & Encoding Fitur
 
 def generate_url_embeddings(url_list, batch_size=16):
     """
@@ -272,9 +211,6 @@ def generate_url_hashing(url_list, n_features=1024):
 #             embeddings.append(np.zeros(vector_size))
 #     return np.array(embeddings)
 
-
-
-# %%
 def encode_methods(methods):
     """
     One-hot encode HTTP methods (e.g., GET, POST, PUT).
@@ -288,7 +224,6 @@ def encode_methods(methods):
     return OneHotEncoder(sparse_output=False).fit_transform(
         np.array(methods).reshape(-1, 1)
     )
-
 
 def encode_statuses(status_categories):
     """
@@ -304,7 +239,6 @@ def encode_statuses(status_categories):
         np.array(status_categories).reshape(-1, 1)
     )
 
-
 def normalize_sizes(sizes):
     """
     Normalize response sizes to the [0, 1] range.
@@ -316,7 +250,6 @@ def normalize_sizes(sizes):
         np.ndarray: Normalized size values in [0, 1].
     """
     return MinMaxScaler().fit_transform(np.array(sizes).reshape(-1, 1))
-
 
 def vectorize_user_agents(ua_tokens, max_features=200):
     """
@@ -332,8 +265,6 @@ def vectorize_user_agents(ua_tokens, max_features=200):
     vectorizer = TfidfVectorizer(max_features=max_features)
     return vectorizer.fit_transform(ua_tokens).toarray()
 
-
-# Step 3: Convert URLs to embeddings
 # URL embeddings
 url_embeddings = generate_url_embeddings(tokenized_urls)
 # url_embeddings = generate_url_hashing(tokenized_urls)
@@ -358,12 +289,9 @@ final_features = np.hstack([url_embeddings, method_enc, status_enc, size_enc, ua
 print(f"✅ Output of: final_features shape {final_features.shape}")
 
 
-# %% [markdown]
 # ## 5. Clustering Log Menggunakan Bisecting K-Means (Library dan Manual)
-#
 # Implementasikan dan jalankan algoritma Bisecting K-Means hasil final fitur, lalu kelompokkan berdasarkan hasil cluster.
 
-# %%
 def evaluate_clusters(features, labels):
     """
     Evaluate clustering results using standard metrics.
@@ -410,9 +338,6 @@ def visualize_clusters(features, labels, out_file="clusters.png", save_plot=True
         print(f"✅ Cluster visualization saved to {out_file}")
     plt.show()
 
-
-
-# %%
 def cluster_logs(df, features, out_path, n_clusters):
     """
     Cluster web server logs using feature embeddings and KMeans.
@@ -458,8 +383,6 @@ def cluster_logs(df, features, out_path, n_clusters):
     
 cluster_logs(df, final_features, output_dir, num_clusters)
 
-
-# %%
 def cluster_logs_manual(df, features, out_path, n_clusters, strategy="biggest_inertia", random_state=42, n_init=5):
     """
     Cluster web server logs using manual Bisecting KMeans.
