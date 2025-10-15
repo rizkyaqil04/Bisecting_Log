@@ -1,1 +1,1 @@
-./tui/target/x86_64-pc-windows-gnu/release/tui.exe
+tui/target/x86_64-pc-windows-msvc/release/tui.exe
