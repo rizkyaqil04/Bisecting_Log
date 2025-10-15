@@ -84,7 +84,10 @@ dmypy.json
 # ==================================================
 # RUST BUILD & ARTIFACTS
 # ==================================================
-**/target
+target/
+!target/.gitkeep
+!target/release/tui
+!target/x86_64-pc-windows-gnu/release/tui.exe
 **/*.crate
 **/*.rlib
 *.log
