@@ -1,7 +1,10 @@
 mod state;
+mod theme;
+mod filter;
+mod io;
 
 use clap::Parser;
-use crossterm::{
+use ratatui::crossterm::{
     event::{self, Event, KeyEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -67,8 +70,15 @@ fn run(
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
-                    // handle_key tidak lagi mengembalikan bool
-                    app.handle_key(&key);
+                    // Hitung visible_count dari tinggi area list (lihat draw_body di state.rs)
+                    let area = terminal.size()?; // Rect seluruh terminal
+                    // Asumsi layout sama seperti di draw_body
+                    let list_area_height = area.height
+                        .saturating_sub(3) // header
+                        .saturating_sub(2); // footer (kurangi sesuai kebutuhan)
+                    let visible_count = list_area_height.saturating_sub(3) as usize; // -3 untuk border list
+
+                    app.handle_key(&key, visible_count);
                 }
             }
             // jika butuh mouse di masa depan, tambahkan match Event::Mouse di sini
