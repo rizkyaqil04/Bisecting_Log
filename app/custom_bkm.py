@@ -97,7 +97,7 @@ class VerboseBisectingKMeans(BisectingKMeans):
         self._n_features_out = self.cluster_centers_.shape[0]
 
         flush_print("PROGRESS: 100")
-        flush_print(f"STATUS: Clustering selesai ✅ (total inertia={self.inertia_:.3f})")
+        flush_print(f"STATUS: Clustering selesai (total inertia={self.inertia_:.3f})")
         flush_print("DONE")
 
         return self
