@@ -22,8 +22,8 @@ pub struct SortMenu {
     pub sortby_scroll: usize,
     last_visible_height: usize,
     pub order_cursor: usize,
-    pub order_scroll: usize,            // <--- Tambah ini
-    order_last_visible_height: usize,   // <--- Tambah ini
+    pub order_scroll: usize,
+    order_last_visible_height: usize,
     pub finished: bool,
     pub cancelled: bool,
 }
@@ -39,8 +39,8 @@ impl SortMenu {
             sortby_scroll: 0,
             last_visible_height: 0,
             order_cursor: if matches!(default_order, SortOrder::Descend) { 1 } else { 0 },
-            order_scroll: 0,                // <--- Tambah ini
-            order_last_visible_height: 0,   // <--- Tambah ini
+            order_scroll: 0,
+            order_last_visible_height: 0,
             finished: false,
             cancelled: false,
         }
@@ -85,7 +85,7 @@ impl SortMenu {
                 }
             }
             1 => {
-                let order_len = 2; // Ganti jika jumlah order bertambah
+                let order_len = 2;
                 if self.order_cursor + 1 < order_len {
                     self.order_cursor += 1;
                     self.ensure_order_cursor_in_view(order_len);
@@ -106,7 +106,7 @@ impl SortMenu {
             1 => {
                 if self.order_cursor > 0 {
                     self.order_cursor -= 1;
-                    self.ensure_order_cursor_in_view(2); // Ganti jika jumlah order bertambah
+                    self.ensure_order_cursor_in_view(2);
                 }
             }
             _ => {}
@@ -145,7 +145,7 @@ impl FloatContent for SortMenu {
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+            .constraints([Constraint::Percentage(75), Constraint::Percentage(25)].as_ref())
             .split(inner);
 
         // ==== SORT BY ====

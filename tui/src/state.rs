@@ -235,11 +235,10 @@ impl App {
                 let (col, ord) = self.current_sort.clone();
                 let cols = self.table.headers.clone();
                 let default_idx = cols.iter().position(|c| c == &col).unwrap_or(0);
-                let height_percent = (cols.len() as u16 * 4).min(70).max(30);
-                self.sort_menu = Some(Float::new(
+                self.sort_menu = Some(Float::new_absolute(
                     Box::new(SortMenu::new(cols, default_idx, ord)),
                     60,
-                    height_percent,
+                    20,
                 ));
             }
             _ => {}
@@ -731,10 +730,21 @@ impl App {
                 c.rows_idx.sort_by(|&a, &b| {
                     let va = &self.table.rows[a][idx];
                     let vb = &self.table.rows[b][idx];
-                    if order == SortOrder::Ascend {
-                        va.cmp(vb)
+
+                    // Coba parse ke f64
+                    let va_num = va.parse::<f64>();
+                    let vb_num = vb.parse::<f64>();
+
+                    let ord = if va_num.is_ok() && vb_num.is_ok() {
+                        va_num.unwrap().partial_cmp(&vb_num.unwrap()).unwrap_or(std::cmp::Ordering::Equal)
                     } else {
-                        vb.cmp(va)
+                        va.cmp(vb)
+                    };
+
+                    if order == SortOrder::Ascend {
+                        ord
+                    } else {
+                        ord.reverse()
                     }
                 });
             }

@@ -20,10 +20,6 @@ pub struct Args {
     /// Number of clusters
     #[arg(short = 'n', long, default_value_t = 8)]
     pub n_clusters: usize,
-
-    /// Enable mouse support
-    #[arg(short = 'm', long)]
-    pub mouse: bool,
 }
 
 impl Args {
@@ -62,7 +58,7 @@ impl Args {
                 let output_path = if let Some(out) = &self.output {
                     out.clone()
                 } else {
-                    PathBuf::from(format!("../outputs/{file_name}.csv"))
+                    PathBuf::from(format!("./outputs/{file_name}.csv"))
                 };
 
                 Ok((Some(input_path.clone()), output_path))

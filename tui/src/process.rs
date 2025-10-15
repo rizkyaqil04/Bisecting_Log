@@ -12,7 +12,7 @@ pub async fn run_python(
     callback: impl Fn(String) + Send + Sync + 'static,
 ) {
     let mut child = Command::new("python3")
-        .arg("../app/run.py")
+        .arg("./app/run.py")
         .arg("--input")
         .arg(input_path)
         .arg("--output")

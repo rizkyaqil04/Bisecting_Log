@@ -13,6 +13,7 @@ pub trait FloatContent {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub enum FloatMode {
     /// Default behavior — based on screen percentage
     Percent(u16, u16),
@@ -25,6 +26,7 @@ pub struct Float<Content: FloatContent + ?Sized> {
     mode: FloatMode,
 }
 
+#[allow(dead_code)]
 impl<Content: FloatContent + ?Sized> Float<Content> {
     /// Create a floating window using percentage-based size
     pub fn new(content: Box<Content>, width_percent: u16, height_percent: u16) -> Self {

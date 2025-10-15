@@ -22,21 +22,21 @@ Cluster 1:
   GET /image/32837?name=des-3600-1111.jpg&wh=200x200 [200]
   GET /image/28893?name=1450677370thumb.jpg&wh=200x200 [200]
   GET /image/32745?name=ms506-14.jpg&wh=200x200 [200]
-  HEAD /amp_preconnect_polyfill_404_or_other_error_expected._Do_not_worry_about_it?1548117000000 [404]
   GET /image/32756?name=eb-x05-11.jpg&wh=200x200 [200]
 
 Cluster 2:
+  HEAD /amp_preconnect_polyfill_404_or_other_error_expected._Do_not_worry_about_it?1548117000000 [404]
+
+Cluster 3:
   GET /image/60844/productModel/200x200 [200]
   GET /image/61474/productModel/200x200 [200]
-  GET /settings/logo [200]
   GET /image/60819/productModel/200x200 [200]
   GET /image/60847/productModel/200x200 [200]
-  GET /image/32574?name=pr465at.jpg&wh=max [200]
-  GET /image/32574?name=pr465at3.jpg&wh=max [200]
-  GET /settings/logo [200]
-  GET / [200]
-  GET /image/32574?name=pr465at1.jpg&wh=max [200]
-  GET /image/32574?name=pr465at2.jpg&wh=max [200]
+  GET /static/images/amp/instagram.png [200]
+  GET /static/images/amp/telegram.png [200]
+  GET /static/images/amp/blog.png [200]
+
+Cluster 4:
   GET /m/filter/b1,p1?page=1 [200]
   GET /static/images/guarantees/goodShopping.png [200]
   GET /static/images/guarantees/warranty.png [200]
@@ -44,13 +44,19 @@ Cluster 2:
   GET /static/images/guarantees/bestPrice.png [200]
   GET /static/css/font/wyekan/font.woff [200]
   GET /static/images/guarantees/fastDelivery.png [200]
-  GET /static/images/amp/instagram.png [200]
-  GET /static/images/amp/telegram.png [200]
-  GET /static/images/amp/blog.png [200]
+
+Cluster 5:
+  GET /settings/logo [200]
+  GET /image/32574?name=pr465at.jpg&wh=max [200]
+  GET /image/32574?name=pr465at3.jpg&wh=max [200]
+  GET /settings/logo [200]
+  GET / [200]
+  GET /image/32574?name=pr465at1.jpg&wh=max [200]
+  GET /image/32574?name=pr465at2.jpg&wh=max [200]
   GET /static/js/accordion.js?_=1548117035128 [200]
   GET /product/29080?model=58289 [200]
 
-Cluster 3:
+Cluster 6:
   GET /product/31893/62100/سشوار-خانگی-پرنسلی-مدل-PR257AT [200]
   GET /m/product/32574/62991/ماشین-اصلاح-صورت-پرنسلی-مدل-PR465AT [200]
   GET /product/10075/13903/مایکروفر-رومیزی-سامسونگ-مدل-CE288 [200]
@@ -59,7 +65,7 @@ Cluster 3:
   GET /product/7793/9663/مایکروفر-رومیزی-سامسونگ-مدل-ME201 [200]
   GET /product/30472/60169/عطر-و-ادکلن-زنانه-دیور-مدل-Poison-Girl [200]
 
-Cluster 4:
+Cluster 7:
   POST /m/updateVariation?__amp_source_origin=https://www.zanbil.ir [200]
   POST /m/updateVariation?__amp_source_origin=https://www.zanbil.ir [200]
   POST /m/updateVariation?__amp_source_origin=https://www.zanbil.ir [200]
