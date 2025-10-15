@@ -87,7 +87,7 @@ dmypy.json
 target/
 !target/.gitkeep
 !target/release/tui
-!target/x86_64-pc-windows-gnu/release/tui.exe
+!target/x86_64-pc-windows-msvc/release/tui.exe
 **/*.crate
 **/*.rlib
 *.log
