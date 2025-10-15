@@ -41,15 +41,6 @@ Bisecting_Log/
   pip install -r app/requirements.txt
   ```
 
-**Rust:**
-
-- Rust toolchain (https://rustup.rs)
-- Enter the `tui/` folder and build:
-  ```sh
-  cd tui
-  cargo build --release
-  ```
-
 ### 2. Run Clustering and TUI
 
 You can use the `bkm-log` command to run clustering and/or open the TUI. The command usage is the same for both Linux and Windows, but the executable name differs:
