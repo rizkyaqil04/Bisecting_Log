@@ -39,8 +39,8 @@ pub fn render_gauge_ui(f: &mut Frame, gauge: &GaugeState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(80),
+            Constraint::Percentage(25),
+            Constraint::Percentage(75),
         ])
         .split(centered_rect);
 

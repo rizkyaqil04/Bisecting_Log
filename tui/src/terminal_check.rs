@@ -7,7 +7,7 @@ use ratatui::{
 
 /// Minimum dimensions for the terminal window.
 pub const MIN_WIDTH: u16 = 100;
-pub const MIN_HEIGHT: u16 = 35;
+pub const MIN_HEIGHT: u16 = 25;
 
 /// Check if the terminal is too small.
 pub fn is_too_small(area: Rect) -> bool {
