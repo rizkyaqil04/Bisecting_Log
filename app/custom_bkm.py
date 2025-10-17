@@ -9,18 +9,37 @@ from sklearn.utils._openmp_helpers import _openmp_effective_n_threads
 from sklearn.utils.validation import _check_sample_weight
 from sklearn.cluster._k_means_common import _inertia_dense, _inertia_sparse
 
-def flush_print(msg: str):
-    print(msg, flush=True)
+from progress import flush_print, ProgressManager  # shared progress utilities
 
 
 class VerboseBisectingKMeans(BisectingKMeans):
     """
-    Versi Bisecting KMeans dengan progress dan status real-time.
-    Struktur dan perilaku mengikuti sklearn.cluster.BisectingKMeans.
+    Bisecting KMeans variant with real-time status and unified progress reporting.
+
+    Args:
+        Follows sklearn.cluster.BisectingKMeans constructor semantics.
+
+    Returns:
+        None
     """
 
-    def fit_verbose(self, X, y=None, sample_weight=None):
-        # === 1. Validasi Input ===
+    def fit_verbose(self, X, y=None, sample_weight=None, progress_manager: ProgressManager = None):
+        """
+        Fit the bisecting k-means model while reporting STATUS and unified PROGRESS.
+
+        Args:
+            X: Feature matrix (dense or CSR sparse).
+            y: Ignored (for API compatibility).
+            sample_weight: Optional sample weights.
+            progress_manager (ProgressManager): Optional shared progress manager. When provided,
+                all PROGRESS prints will be emitted by the shared manager so the whole pipeline
+                shows a single unified PROGRESS percentage. If not provided, local progress
+                prints are used (backward-compatible).
+
+        Returns:
+            self
+        """
+        # Validate input
         X = validate_data(
             self,
             X,
@@ -36,10 +55,32 @@ class VerboseBisectingKMeans(BisectingKMeans):
         sample_weight = _check_sample_weight(sample_weight, X, dtype=X.dtype)
         self._n_threads = _openmp_effective_n_threads()
 
-        flush_print(f"STATUS: Memulai BisectingKMeans (k={self.n_clusters})")
-        flush_print("PROGRESS: 8")
+        # Compute BKM internal total units (same formula used elsewhere)
+        bkm_total_units = 4 + max(1, self.n_clusters - 1) + 3
+        local_current = 1
 
-        # === 2. Setup algorithm (lloyd/elkan) ===
+        def local_report_status_and_progress_local(msg: str):
+            """Fallback local reporting (used when no progress_manager provided)."""
+            nonlocal local_current
+            flush_print(f"STATUS: {msg}")
+            pct = int(round(local_current / bkm_total_units * 100))
+            flush_print(f"PROGRESS: {pct}")
+
+        def local_advance_local():
+            nonlocal local_current
+            local_current += 1
+            pct = int(round(local_current / bkm_total_units * 100))
+            flush_print(f"PROGRESS: {pct}")
+
+        # Initial STATUS / PROGRESS
+        if progress_manager is None:
+            local_report_status_and_progress_local("Starting BisectingKMeans initialization")
+        else:
+            # Print a STATUS line (internal step) but let progress_manager handle PROGRESS
+            flush_print("STATUS: Starting BisectingKMeans initialization")
+            progress_manager.advance(1)
+
+        # Setup algorithm (lloyd/elkan)
         if self.algorithm == "lloyd" or self.n_clusters == 1:
             from sklearn.cluster._kmeans import _kmeans_single_lloyd
             self._kmeans_single = _kmeans_single_lloyd
@@ -48,13 +89,27 @@ class VerboseBisectingKMeans(BisectingKMeans):
             from sklearn.cluster._kmeans import _kmeans_single_elkan
             self._kmeans_single = _kmeans_single_elkan
 
-        # === 3. Centering data ===
+        if progress_manager is None:
+            local_advance_local()
+            flush_print("STATUS: KMeans algorithm backend configured")
+        else:
+            flush_print("STATUS: KMeans algorithm backend configured")
+            progress_manager.advance(1)
+
+        # Centering data
         if not sp.issparse(X):
             self._X_mean = X.mean(axis=0)
             X -= self._X_mean
         x_squared_norms = row_norms(X, squared=True)
 
-        # === 4. Buat root tree ===
+        if progress_manager is None:
+            local_advance_local()
+            flush_print("STATUS: Data centering complete")
+        else:
+            flush_print("STATUS: Data centering complete")
+            progress_manager.advance(1)
+
+        # Create root tree
         from sklearn.cluster._bisect_k_means import _BisectingTree
         self._bisecting_tree = _BisectingTree(
             indices=np.arange(X.shape[0]),
@@ -62,20 +117,26 @@ class VerboseBisectingKMeans(BisectingKMeans):
             score=0,
         )
 
-        flush_print("STATUS: Root cluster dibuat")
-        flush_print("PROGRESS: 10")
+        if progress_manager is None:
+            local_advance_local()
+            flush_print("STATUS: Root cluster created")
+        else:
+            flush_print("STATUS: Root cluster created")
+            progress_manager.advance(1)
 
-        # === 5. Iterasi bisection utama ===
+        # Main bisection iterations
         for step in range(self.n_clusters - 1):
             cluster_to_bisect = self._bisecting_tree.get_cluster_to_bisect()
 
-            flush_print(f"STATUS: Membagi cluster ke-{step+1}/{self.n_clusters-1} (size={len(cluster_to_bisect.indices)})")
+            flush_print(f"STATUS: Bisecting cluster {step+1} of {max(1, self.n_clusters-1)} (size={len(cluster_to_bisect.indices)})")
             self._bisect(X, x_squared_norms, sample_weight, cluster_to_bisect)
 
-            progress = int(5 + (step + 1) / (self.n_clusters - 1) * 90)
-            flush_print(f"PROGRESS: {progress}")
+            if progress_manager is None:
+                local_advance_local()
+            else:
+                progress_manager.advance(1)
 
-        # === 6. Agregasi hasil ===
+        # Aggregating results into labels and centers
         self.labels_ = np.full(X.shape[0], -1, dtype=np.int32)
         self.cluster_centers_ = np.empty((self.n_clusters, X.shape[1]), dtype=X.dtype)
 
@@ -85,7 +146,14 @@ class VerboseBisectingKMeans(BisectingKMeans):
             node.label = i
             node.indices = None
 
-        # === 7. Kembalikan mean & hitung inertia ===
+        if progress_manager is None:
+            local_advance_local()
+            flush_print("STATUS: Cluster labels and centers aggregated")
+        else:
+            flush_print("STATUS: Cluster labels and centers aggregated")
+            progress_manager.advance(1)
+
+        # Restore mean (if applied) and compute inertia
         if not sp.issparse(X):
             X += self._X_mean
             self.cluster_centers_ += self._X_mean
@@ -96,8 +164,19 @@ class VerboseBisectingKMeans(BisectingKMeans):
         )
         self._n_features_out = self.cluster_centers_.shape[0]
 
-        flush_print("PROGRESS: 100")
-        flush_print(f"STATUS: Clustering selesai (total inertia={self.inertia_:.3f})")
-        flush_print("DONE")
+        if progress_manager is None:
+            local_advance_local()
+            pct = int(round(local_current / bkm_total_units * 100))
+            flush_print(f"PROGRESS: {pct}")
+            flush_print(f"STATUS: Clustering finished (total inertia={self.inertia_:.3f})")
+            # finalize local
+            local_current = bkm_total_units
+            pct = int(round(local_current / bkm_total_units * 100))
+            flush_print(f"PROGRESS: {pct}")
+            flush_print("DONE")
+        else:
+            progress_manager.advance(1)
+            flush_print(f"STATUS: Clustering finished (total inertia={self.inertia_:.3f})")
+            # ensure internal BKM units consumed - progress_manager already advanced per unit above
 
         return self

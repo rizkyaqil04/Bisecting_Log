@@ -103,8 +103,8 @@ target
 inputs/*
 !inputs/sample.log
 outputs/*
-!outputs/sample.csv
-!outputs/sample.csv.txt
+!outputs/sample.csv.gz
+!outputs/sample.txt
 *.pkl
 
 # ==================================================

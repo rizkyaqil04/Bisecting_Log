@@ -58,7 +58,7 @@ impl Args {
                 let output_path = if let Some(out) = &self.output {
                     out.clone()
                 } else {
-                    PathBuf::from(format!("./outputs/{file_name}.csv"))
+                    PathBuf::from(format!("./outputs/{file_name}.csv.gz"))
                 };
 
                 Ok((Some(input_path.clone()), output_path))
