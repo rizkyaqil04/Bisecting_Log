@@ -58,7 +58,7 @@ Use the compiled binary directly:
 Use the `.exe` extension for the executable:
 
 ```bat
-bkm-log.exe -i inputs\sample.log -n 10
+.\bkm-log.exe -i .\inputs\sample.log -n 10
 ```
 
 #### Command Options
