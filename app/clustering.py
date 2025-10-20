@@ -19,6 +19,7 @@ from tqdm import trange
 from sklearn.feature_extraction.text import HashingVectorizer, TfidfVectorizer, TfidfTransformer
 from scipy.sparse import csr_matrix, hstack, vstack, issparse
 import math
+import logging
 
 # Select GPU if available, otherwise fallback to CPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -368,6 +369,32 @@ def predict_labels(model: VerboseBisectingKMeans, predict_features=None, fit_fea
     return labels
 
 
+def _strip_known_extensions(path: str) -> str:
+    """
+    Return the base path with common output extensions removed.
+
+    Args:
+        path (str): Input filesystem path which may include extensions like
+                    ".csv", ".gz", ".txt", ".json", or ".log".
+
+    Returns:
+        str: Base path with known extensions removed (e.g. "sample" from
+             "sample.csv.gz" or "sample.csv").
+    """
+    base = path
+    # remove trailing .gz first (so splitext will expose .csv if present)
+    if base.lower().endswith(".gz"):
+        base = base[:-3]
+    # iteratively strip known single extensions
+    while True:
+        base_no_ext, ext = os.path.splitext(base)
+        if ext.lower() in (".csv", ".txt", ".json", ".log"):
+            base = base_no_ext
+            continue
+        break
+    return base
+
+
 def save_cluster_outputs(df, labels, out_path, n_clusters, progress_manager: ProgressManager = None):
     """
     Save clustered DataFrame as compressed CSV and write a text summary.
@@ -389,7 +416,7 @@ def save_cluster_outputs(df, labels, out_path, n_clusters, progress_manager: Pro
     df_label = df.copy()
     df_label["cluster"] = labels
 
-    base, _ = os.path.splitext(out_path)
+    base = _strip_known_extensions(out_path)
     csv_path = f"{base}.csv.gz"
     txt_path = f"{base}.txt"
 
@@ -447,8 +474,8 @@ def evaluate_and_save_metrics(fit_features, labels, out_path, progress_manager: 
     else:
         metrics = evaluate_clusters(fit_features, labels)
 
-    base, _ = os.path.splitext(out_path)
-    metrics_path = f"{base}_metrics.txt"
+    base_output = _strip_known_extensions(out_path)
+    metrics_path = f"{base_output}_metrics.txt"
     with open(metrics_path, "w") as mf:
         for k, v in metrics.items():
             mf.write(f"{k}: {v}\n")
@@ -473,6 +500,18 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     Returns:
         None
     """
+    # Setup logger that records all status messages for this run
+    logger = logging.getLogger("bisecting_log")
+    logger.setLevel(logging.INFO)
+    # ensure no duplicate handlers if called multiple times
+    logger.handlers = []
+    logger.propagate = False
+    base_output = _strip_known_extensions(output_path)
+    log_path = f"{base_output}_status.log"
+    fh = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+    logger.addHandler(fh)
+
     # Define broad pipeline stages
     stages = [
         "read_and_parse",
@@ -494,6 +533,19 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
 
     # Initialize shared progress manager (single unified PROGRESS)
     progress = ProgressManager(total_units)
+
+    # Monkeypatch progress.set_status so every status also gets logged
+    _orig_set_status = progress.set_status
+
+    def _logged_set_status(msg):
+        try:
+            _orig_set_status(msg)
+        finally:
+            # always log the status (even if ProgressManager raises)
+            logger.info(msg)
+
+    progress.set_status = _logged_set_status
+
     progress.set_status("Initializing pipeline")
 
     # Stage 0: read & parse
@@ -517,6 +569,7 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
         MODEL = BertModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device)
         MODEL.eval()
 
+    # url_embeddings = generate_url_hashing(tokenized_urls)
     url_embeddings = generate_url_bert(tokenized_urls, TOKENIZER, MODEL, device)
     url_embeddings = normalize(url_embeddings)
     progress.advance(stage_units["embed_urls"])
@@ -550,7 +603,7 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     labels = predict_labels(bkm, predict_features=final_features, fit_features=features_sample, progress_manager=progress)
 
     # Stage 6: save outputs
-    progress.set_status("Saving clustered outputs (CSV + TXT). It will take some time...")
+    progress.set_status(f"Saving clustered outputs (CSV + TXT). It will take some time...")
     save_cluster_outputs(df, labels, output_path, n_clusters, progress_manager=progress)
     progress.advance(stage_units["assign_and_save"])
 
@@ -562,4 +615,13 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     # Finalize
     progress.set_status(f"Results saved to {output_path}")
     progress.complete()
+
+    # Ensure file handler is flushed/closed
+    for h in logger.handlers:
+        try:
+            h.flush()
+            h.close()
+        except Exception:
+            pass
+    logger.handlers = []
 
