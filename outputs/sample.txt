@@ -1,33 +1,6 @@
 
-Cluster 0 (6 entries):
-  GET /m/product/32574/62991/ماشین-اصلاح-صورت-پرنسلی-مدل-PR465AT [200]
-  GET /product/10075/13903/مایکروفر-رومیزی-سامسونگ-مدل-CE288 [200]
-  GET /product/32798/63266/یخچال-فریزر-سینجر-مدل-pearl-SR7 [200]
-  GET /product/7793/9663/مایکروفر-رومیزی-سامسونگ-مدل-ME201 [200]
-  GET /static/images/amp/third-party/footer-mobile.png [200]
-  GET /product/29080?model=58289 [200]
-
-Cluster 1 (2 entries):
-  GET /product/31893/62100/سشوار-خانگی-پرنسلی-مدل-PR257AT [200]
-  GET /product/30472/60169/عطر-و-ادکلن-زنانه-دیور-مدل-Poison-Girl [200]
-
-Cluster 2 (1 entries):
-  GET /static/js/accordion.js?_=1548117035128 [200]
-
-Cluster 3 (7 entries):
+Cluster 0 (8 entries):
   GET /settings/logo [200]
-  GET /m/product/33978/64784/گوشی-موبایل-سامسونگ-مدل-Galaxy-A9-(2018)-Dual-128GB-(SM-A920) [200]
-  GET /settings/logo [200]
-  GET / [200]
-  GET /static/images/amp/blog.png [200]
-  GET /static/images/amp/instagram.png [200]
-  GET /static/images/amp/telegram.png [200]
-
-Cluster 4 (12 entries):
-  GET /image/32574?name=pr465at.jpg&wh=max [200]
-  GET /image/32574?name=pr465at3.jpg&wh=max [200]
-  GET /image/32574?name=pr465at1.jpg&wh=max [200]
-  GET /image/32574?name=pr465at2.jpg&wh=max [200]
   GET /m/filter/b1,p1?page=1 [200]
   GET /static/images/guarantees/goodShopping.png [200]
   GET /static/images/guarantees/warranty.png [200]
@@ -35,9 +8,17 @@ Cluster 4 (12 entries):
   GET /static/images/guarantees/bestPrice.png [200]
   GET /static/css/font/wyekan/font.woff [200]
   GET /static/images/guarantees/fastDelivery.png [200]
-  HEAD /amp_preconnect_polyfill_404_or_other_error_expected._Do_not_worry_about_it?1548117000000 [404]
 
-Cluster 5 (7 entries):
+Cluster 1 (7 entries):
+  GET /image/60844/productModel/200x200 [200]
+  GET /image/61474/productModel/200x200 [200]
+  GET /image/60819/productModel/200x200 [200]
+  GET /image/60847/productModel/200x200 [200]
+  GET /static/images/amp/instagram.png [200]
+  GET /static/images/amp/telegram.png [200]
+  GET /static/images/amp/blog.png [200]
+
+Cluster 2 (7 entries):
   GET /image/33888?name=model-b2048u-1-.jpg&wh=200x200 [200]
   GET /image/32757?name=eb-x41-4.jpg&wh=200x200 [200]
   GET /image/1221?name=rs12w.jpg&wh=200x200 [200]
@@ -46,24 +27,43 @@ Cluster 5 (7 entries):
   GET /image/32745?name=ms506-14.jpg&wh=200x200 [200]
   GET /image/32756?name=eb-x05-11.jpg&wh=200x200 [200]
 
-Cluster 6 (17 entries):
-  GET /image/60844/productModel/200x200 [200]
-  GET /image/61474/productModel/200x200 [200]
-  GET /image/60819/productModel/200x200 [200]
-  GET /image/60847/productModel/200x200 [200]
+Cluster 3 (8 entries):
+  GET /m/product/32574/62991/ماشین-اصلاح-صورت-پرنسلی-مدل-PR465AT [200]
+  GET /settings/logo [200]
+  GET /image/32574?name=pr465at.jpg&wh=max [200]
+  GET /image/32574?name=pr465at3.jpg&wh=max [200]
+  GET / [200]
+  GET /image/32574?name=pr465at1.jpg&wh=max [200]
+  GET /image/32574?name=pr465at2.jpg&wh=max [200]
+  GET /static/js/accordion.js?_=1548117035128 [200]
+
+Cluster 4 (7 entries):
+  GET /product/31893/62100/سشوار-خانگی-پرنسلی-مدل-PR257AT [200]
+  GET /product/10075/13903/مایکروفر-رومیزی-سامسونگ-مدل-CE288 [200]
+  GET /product/32798/63266/یخچال-فریزر-سینجر-مدل-pearl-SR7 [200]
+  GET /m/product/33978/64784/گوشی-موبایل-سامسونگ-مدل-Galaxy-A9-(2018)-Dual-128GB-(SM-A920) [200]
+  GET /product/7793/9663/مایکروفر-رومیزی-سامسونگ-مدل-ME201 [200]
+  GET /product/29080?model=58289 [200]
+  GET /product/30472/60169/عطر-و-ادکلن-زنانه-دیور-مدل-Poison-Girl [200]
+
+Cluster 5 (14 entries):
   GET /image/61821/productModel/150x150 [200]
   GET /image/64500/productModel/150x150 [200]
   GET /image/64643/productModel/150x150 [200]
   GET /image/32703/productType/120x90 [200]
   GET /image/66/productType/120x90 [200]
+  GET /static/images/amp/blog.png [200]
+  GET /static/images/amp/instagram.png [200]
+  GET /static/images/amp/telegram.png [200]
+  GET /static/images/amp/third-party/footer-mobile.png [200]
   GET /image/33618/productType/120x90 [200]
   GET /image/64272/productModel/150x150 [200]
   GET /image/64648/productModel/150x150 [200]
   GET /image/33419/productType/120x90 [200]
-  GET /static/images/amp/instagram.png [200]
-  GET /static/images/amp/telegram.png [200]
-  GET /static/images/amp/blog.png [200]
   GET /image/62423/productModel/150x150 [200]
+
+Cluster 6 (1 entries):
+  HEAD /amp_preconnect_polyfill_404_or_other_error_expected._Do_not_worry_about_it?1548117000000 [404]
 
 Cluster 7 (9 entries):
   POST /m/updateVariation?__amp_source_origin=https://www.zanbil.ir [200]
