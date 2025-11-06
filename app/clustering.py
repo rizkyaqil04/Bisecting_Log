@@ -1,6 +1,7 @@
 # core/clustering.py
 import re
 import os
+import joblib
 import torch
 import numpy as np
 from urllib.parse import urlparse, unquote
@@ -17,17 +18,12 @@ from decoder import parse_dec_file_to_dataframe
 from pprint import pprint
 from tqdm import trange
 from sklearn.feature_extraction.text import HashingVectorizer, TfidfVectorizer, TfidfTransformer
-from scipy.sparse import csr_matrix, hstack, vstack, issparse
+from scipy.sparse import csr_matrix, hstack, vstack, issparse, diags
 import math
 import logging
 
 # Select GPU if available, otherwise fallback to CPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Remove eager global loading of tokenizer/model to avoid noisy output at import time.
-# TOKENIZER = BertTokenizer.from_pretrained("bert-base-uncased")
-# MODEL = BertModel.from_pretrained("bert-base-uncased").to(device)
-# MODEL.eval()
 
 # ===================================================
 # Functions for feature extraction and preprocessing
@@ -102,81 +98,84 @@ def categorize_status(code):
 # ===================================================
 # Vectorization and embedding functions
 # ===================================================
-def generate_url_bert(url_list, TOKENIZER, MODEL, device, batch_size=32, out_path=None):
+def get_cache_dir(subfolder=None):
     """
-    Generate BERT embeddings for a list of URL strings.
-
-    Args:
-        url_list (list[str]): Preprocessed URL strings.
-        TOKENIZER: Transformers tokenizer instance.
-        MODEL: Transformers model instance.
-        device (torch.device): Device to run model on.
-        batch_size (int): Batch size for embedding extraction.
-        out_path (str|None): Optional memmap path to store embeddings.
+    Pastikan folder cache exist. Jika subfolder diberikan (misal 'embeddings'),
+    maka buat juga subfolder tersebut dan return path-nya.
 
     Returns:
-        np.ndarray or np.memmap: Array of embeddings with dtype float32.
+        str: Path folder cache atau subfolder dalam cache.
+    """
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # dari app ke root
+    cache_root = os.path.join(project_root, "cache")
+    os.makedirs(cache_root, exist_ok=True)
+
+    if subfolder:
+        path = os.path.join(cache_root, subfolder)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    return cache_root
+
+
+def generate_url_bert(url_list, TOKENIZER, MODEL, device, batch_size=32, out_path="embeddings"):
+    """
+    Generate BERT embeddings for a list of preprocessed URL strings.
+
+    Args:
+        url_list (list): List of preprocessed URL strings.
+        TOKENIZER (transformers tokenizer): Pre-trained tokenizer.
+        MODEL (transformers model): Pre-trained model (e.g. BERT, MiniLM, etc.).
+        device (torch.device): Computation device ("cuda" or "cpu").
+        batch_size (int, optional): Batch size for embedding. Defaults to 32.
+        out_path (str, optional): Path for memmap file to store embeddings.
+
+    Returns:
+        np.ndarray or np.memmap: Dense array or memory-mapped embeddings.
     """
     MODEL.eval()
     dim = MODEL.config.hidden_size
 
     if out_path:
-        fp = np.memmap(out_path, dtype=np.float32, mode='w+', shape=(len(url_list), dim))
+        cache_embed_dir = get_cache_dir(out_path)
+        bert_memmap_path = os.path.join(cache_embed_dir, "url_embeddings.memmap")
+        fp = np.memmap(bert_memmap_path, dtype=np.float32, mode='w+', shape=(len(url_list), dim))
+        use_memmap = True
     else:
-        fp = []
+        fp = []  # list biasa
+        use_memmap = False
 
-    with silence_output():
-        for i in trange(0, len(url_list), batch_size, desc="Embedding URLs"):
-            batch = url_list[i:i + batch_size]
-            inputs = TOKENIZER(batch, return_tensors="pt", padding=True, truncation=True, max_length=64).to(device)
-            with torch.no_grad():
-                outputs = MODEL(**inputs)
-            emb = outputs.last_hidden_state.mean(dim=1).cpu().numpy().astype(np.float32)
+    for i in trange(0, len(url_list), batch_size, desc="Embedding URLs"):
+        batch = url_list[i : i + batch_size]
+        inputs = TOKENIZER(batch, return_tensors="pt", padding=True, truncation=True, max_length=64).to(device)
 
-            if out_path:
-                fp[i:i + len(batch)] = emb
+        with torch.no_grad():
+            if device.type == "cuda":
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    outputs = MODEL(**inputs)
             else:
-                fp.append(emb)
+                outputs = MODEL(**inputs)
 
-            del emb, inputs, outputs
-            try:
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
+        emb = outputs.last_hidden_state.mean(dim=1).cpu().float().numpy()
 
-    if out_path:
-        del fp
-        return np.memmap(out_path, dtype=np.float32, mode='r', shape=(len(url_list), dim))
+        if use_memmap:
+            fp[i : i + len(batch)] = emb
+        else:
+            fp.append(emb)
+
+        del emb, inputs, outputs
+        try:
+            torch.cuda.empty_cache()
+        except:
+            pass
+
+    if use_memmap:
+        del fp 
+        return np.memmap(bert_memmap_path, dtype=np.float32, mode='r', shape=(len(url_list), dim))
     else:
         return np.vstack(fp)
     
     
-def generate_url_hashing(url_list, n_features=1024, batch_size=50000):
-    """
-    Generate feature vectors for URLs using a hashing trick.
-
-    Args:
-        url_list (list): List of tokenized URL strings.
-        n_features (int, optional): Number of output features. Defaults to 1024.
-        batch_size (int, optional): Number of URLs per batch. Defaults to 50000.
-
-    Returns:
-        scipy.sparse.csr_matrix: L2-normalized sparse matrix of hashed URL features.
-    """
-    vectorizer = HashingVectorizer(
-        n_features=n_features,
-        alternate_sign=False,
-        dtype=np.float32
-    )
-
-    X_batches = []
-    for i in range(0, len(url_list), batch_size):
-        batch = url_list[i:i + batch_size]
-        X_batches.append(vectorizer.transform(batch))
-    X = vstack(X_batches)
-    return normalize(X, norm='l2', copy=False)
-
-
 def encode_methods(methods):
     """
     One-hot encode HTTP methods into a sparse matrix.
@@ -220,19 +219,38 @@ def normalize_sizes(sizes):
     return csr_matrix(arr)
 
 
-def vectorize_user_agents(ua_tokens, max_features=200):
+def vectorize_user_agents(ua_tokens, max_features=200, out_path=None):
     """
-    Convert tokenized user-agent strings into TF-IDF features.
+    Convert tokenized User-Agent strings into TF-IDF sparse vectors.
 
     Args:
-        ua_tokens (list[str]): Tokenized User-Agent text per record.
-        max_features (int): Maximum TF-IDF vocabulary size.
-
+        ua_tokens (list[str]): List of tokenized User-Agent strings.
+        max_features (int, optional): Maximum vocabulary size. Defaults to 200.
+        out_path (str, optional): Subdirectory name under cache/ to store or load TF-IDF vocabulary.
+    
     Returns:
-        scipy.sparse.csr_matrix: TF-IDF feature matrix (float32).
+        scipy.sparse.csr_matrix: TF-IDF feature matrix for User-Agent tokens.
     """
+    if not out_path:
+        vectorizer = TfidfVectorizer(max_features=max_features, dtype=np.float32)
+        return vectorizer.fit_transform(ua_tokens)
+
+    cache_feat_dir = get_cache_dir(out_path)
+    vocab_path = os.path.join(cache_feat_dir, "ua_tfidf_vocab.pkl")
+
+    if os.path.exists(vocab_path):
+        data = joblib.load(vocab_path)
+        vectorizer = TfidfVectorizer(dtype=np.float32, vocabulary=data["vocab"])
+        vectorizer.idf_ = data["idf"]
+        vectorizer._tfidf._idf_diag = diags(data["idf"])
+        return vectorizer.transform(ua_tokens)
+
     vectorizer = TfidfVectorizer(max_features=max_features, dtype=np.float32)
-    return vectorizer.fit_transform(ua_tokens)
+    X = vectorizer.fit_transform(ua_tokens)
+
+    joblib.dump({"vocab": vectorizer.vocabulary_, "idf": vectorizer.idf_}, vocab_path)
+
+    return X
 
 
 # ===================================================
@@ -569,8 +587,7 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
         MODEL = BertModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device)
         MODEL.eval()
 
-    # url_embeddings = generate_url_hashing(tokenized_urls)
-    url_embeddings = generate_url_bert(tokenized_urls, TOKENIZER, MODEL, device)
+    url_embeddings = generate_url_bert(tokenized_urls, TOKENIZER, MODEL, device, out_path="embeddings")
     url_embeddings = normalize(url_embeddings)
     progress.advance(stage_units["embed_urls"])
 
@@ -579,15 +596,14 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     method_enc = encode_methods(methods)
     status_enc = encode_statuses(status_categories)
     size_enc = normalize_sizes(sizes)
-    ua_enc = vectorize_user_agents(ua_tokens)
+    ua_enc = vectorize_user_agents(ua_tokens, out_path="ua_features")
     progress.advance(stage_units["vectorize_other_features"])
 
     # Stage 4: combine features and optionally sample
     progress.set_status("Combining feature matrices and preparing sampling")
     final_features = combine_features(url_embeddings, method_enc, status_enc, size_enc, ua_enc)
 
-    if sample_frac < 1.0:
-        progress.set_status(f"Sampling {sample_frac*100:.0f}% of data for clustering training")
+    if len(df) > 200000 and sample_frac < 1.0:  # sampling hanya kalau data besar
         df_sample = df.sample(frac=sample_frac, random_state=42)
         features_sample = final_features[df_sample.index]
     else:
@@ -624,4 +640,3 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
         except Exception:
             pass
     logger.handlers = []
-
