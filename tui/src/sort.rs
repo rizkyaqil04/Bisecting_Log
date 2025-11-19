@@ -3,7 +3,7 @@ use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     layout::{Constraint, Direction, Layout, Rect},
     prelude::*,
-    widgets::{Block, Borders, BorderType, Clear, List, ListItem},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,11 @@ impl SortMenu {
             sortby_cursor: default_col,
             sortby_scroll: 0,
             last_visible_height: 0,
-            order_cursor: if matches!(default_order, SortOrder::Descend) { 1 } else { 0 },
+            order_cursor: if matches!(default_order, SortOrder::Descend) {
+                1
+            } else {
+                0
+            },
             order_scroll: 0,
             order_last_visible_height: 0,
             finished: false,
@@ -51,7 +55,9 @@ impl SortMenu {
             return;
         }
         let start = self.sortby_scroll;
-        let end = self.sortby_scroll.saturating_add(self.last_visible_height.saturating_sub(1));
+        let end = self
+            .sortby_scroll
+            .saturating_add(self.last_visible_height.saturating_sub(1));
         if self.sortby_cursor < start {
             self.sortby_scroll = self.sortby_cursor;
         } else if self.sortby_cursor > end {
@@ -66,7 +72,9 @@ impl SortMenu {
             return;
         }
         let start = self.order_scroll;
-        let end = self.order_scroll.saturating_add(self.order_last_visible_height.saturating_sub(1));
+        let end = self
+            .order_scroll
+            .saturating_add(self.order_last_visible_height.saturating_sub(1));
         if self.order_cursor < start {
             self.order_scroll = self.order_cursor;
         } else if self.order_cursor > end {
@@ -178,13 +186,11 @@ impl FloatContent for SortMenu {
             .borders(Borders::ALL)
             .title(" Sort By ")
             .border_type(BorderType::Rounded)
-            .border_style(
-                if self.cursor_panel == 0 {
-                    Style::default().fg(theme.focused_color())
-                } else {
-                    Style::default().fg(theme.unfocused_color())
-                },
-            );
+            .border_style(if self.cursor_panel == 0 {
+                Style::default().fg(theme.focused_color())
+            } else {
+                Style::default().fg(theme.unfocused_color())
+            });
 
         frame.render_widget(List::new(visible_items).block(sort_block), layout[0]);
 
@@ -223,21 +229,24 @@ impl FloatContent for SortMenu {
             .borders(Borders::ALL)
             .title(" Order ")
             .border_type(BorderType::Rounded)
-            .border_style(
-                if self.cursor_panel == 1 {
-                    Style::default().fg(theme.focused_color())
-                } else {
-                    Style::default().fg(theme.unfocused_color())
-                },
-            );
+            .border_style(if self.cursor_panel == 1 {
+                Style::default().fg(theme.focused_color())
+            } else {
+                Style::default().fg(theme.unfocused_color())
+            });
         frame.render_widget(List::new(order_items).block(order_block), layout[1]);
     }
 
     fn handle_key_event(&mut self, key: &KeyEvent) -> bool {
         use KeyCode::*;
         match key.code {
-            Char('q') | Esc => { self.finished = true; self.cancelled = true; }
-            Enter => { self.finished = true; }
+            Char('q') | Esc => {
+                self.finished = true;
+                self.cancelled = true;
+            }
+            Enter => {
+                self.finished = true;
+            }
             Tab => self.switch_focus(),
             Char('j') | Down => self.move_down(),
             Char('k') | Up => self.move_up(),
@@ -247,7 +256,9 @@ impl FloatContent for SortMenu {
         self.finished
     }
 
-    fn is_finished(&self) -> bool { self.finished }
+    fn is_finished(&self) -> bool {
+        self.finished
+    }
 
     fn get_shortcut_list(&self) -> (&str, Box<[Shortcut]>) {
         (

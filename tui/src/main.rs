@@ -1,31 +1,31 @@
-mod terminal_check;
 mod cli;
-mod theme;
-mod filter;
 mod data;
 mod detail;
-mod state;
-mod sort;
+mod filter;
 mod float;
-mod hint;
 mod gauge;
+mod hint;
 mod process;
 mod quit;
+mod sort;
+mod state;
+mod terminal_check;
+mod theme;
 
 use crate::{
     cli::Args,
-    state::App,
     gauge::{GaugeState, render_gauge_ui},
+    state::App,
 };
 use anyhow::Result;
 use crossterm::{
-    terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use terminal_check::{is_too_small, draw_too_small_warning};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
 use std::sync::{Arc, Mutex};
+use terminal_check::{draw_too_small_warning, is_too_small};
 use tokio::sync::mpsc;
 
 #[tokio::main]
@@ -71,8 +71,8 @@ async fn main() -> Result<()> {
             python_handle_opt = Some(handle);
         }
 
-        use std::time::{Instant, Duration};
         use std::fs;
+        use std::time::{Duration, Instant};
         let mut last_log_update = Instant::now() - Duration::from_secs(1);
 
         // --- gauge python process loop
@@ -110,16 +110,35 @@ async fn main() -> Result<()> {
                     break;
                 }
 
-                let file_stem = base.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "output".into());
-                let log_path = base.parent().map(|p| p.join(format!("{}_status.log", file_stem))).unwrap_or_else(|| std::path::PathBuf::from(format!("{}_status.log", file_stem)));
+                let file_stem = base
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "output".into());
+                let log_path = base
+                    .parent()
+                    .map(|p| p.join(format!("{}_status.log", file_stem)))
+                    .unwrap_or_else(|| {
+                        std::path::PathBuf::from(format!("{}_status.log", file_stem))
+                    });
 
                 let mut gs = gauge.lock().unwrap();
                 if let Ok(s) = fs::read_to_string(&log_path) {
                     let lines: Vec<&str> = s.lines().collect();
-                    let start = if lines.len() > 12 { lines.len() - 12 } else { 0 };
+                    let start = if lines.len() > 12 {
+                        lines.len() - 12
+                    } else {
+                        0
+                    };
                     let tail = lines[start..].join("\n");
-                    gs.message = if tail.trim().is_empty() { None } else { Some(tail) };
-                    gs.message_error = gs.message.as_ref().map_or(false, |m| m.contains("Traceback") || m.contains("ERROR"));
+                    gs.message = if tail.trim().is_empty() {
+                        None
+                    } else {
+                        Some(tail)
+                    };
+                    gs.message_error = gs
+                        .message
+                        .as_ref()
+                        .map_or(false, |m| m.contains("Traceback") || m.contains("ERROR"));
                 } else {
                     // no log yet -> hide message
                     gs.message = None;

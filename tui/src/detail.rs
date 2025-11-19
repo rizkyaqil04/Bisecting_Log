@@ -1,8 +1,5 @@
 use crate::{float::FloatContent, hint::Shortcut, theme::Theme};
-use ratatui::{
-    layout::Rect,
-    Frame,
-};
+use ratatui::{Frame, layout::Rect};
 
 pub struct DataDetail {
     pub lines: Vec<String>,
@@ -11,16 +8,19 @@ pub struct DataDetail {
 
 impl DataDetail {
     pub fn new(lines: Vec<String>) -> Self {
-        Self { lines, finished: false }
+        Self {
+            lines,
+            finished: false,
+        }
     }
 }
 
 impl FloatContent for DataDetail {
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::{
+            layout::Alignment,
             style::Style,
             widgets::{Block, Borders, Clear, Paragraph},
-            layout::Alignment,
         };
 
         // Dim overlay
@@ -29,7 +29,12 @@ impl FloatContent for DataDetail {
         frame.render_widget(Clear, area);
 
         let text = Paragraph::new(self.lines.join("\n"))
-            .block(Block::default().borders(Borders::ALL).title(" Detail ").border_type(ratatui::widgets::BorderType::Rounded))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Detail ")
+                    .border_type(ratatui::widgets::BorderType::Rounded),
+            )
             .style(Style::default().fg(theme.info_color()))
             .alignment(Alignment::Left);
 
@@ -52,11 +57,6 @@ impl FloatContent for DataDetail {
     }
 
     fn get_shortcut_list(&self) -> (&str, Box<[Shortcut]>) {
-        (
-            "Detail",
-            crate::shortcuts!(
-                ("Close", ["q", "Esc"]),
-            ),
-        )
+        ("Detail", crate::shortcuts!(("Close", ["q", "Esc"]),))
     }
 }

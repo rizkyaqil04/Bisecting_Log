@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
 /// Minimum dimensions for the terminal window.

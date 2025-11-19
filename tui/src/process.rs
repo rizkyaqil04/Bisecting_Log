@@ -1,8 +1,8 @@
+use std::{env, path::PathBuf, process::Stdio};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
 };
-use std::{env, path::PathBuf, process::Stdio};
 
 use tokio::sync::oneshot;
 
@@ -13,7 +13,10 @@ pub fn spawn_python_with_shutdown(
     output_path: &PathBuf,
     n_clusters: usize,
     callback: impl Fn(String) + Send + Sync + 'static,
-) -> (tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
     let input_path = input_path.clone();
     let output_path = output_path.clone();
     let cb = std::sync::Arc::new(callback);

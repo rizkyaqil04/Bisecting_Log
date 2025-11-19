@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Paragraph},
     symbols::border,
+    widgets::{Block, Paragraph},
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -15,9 +15,9 @@ pub enum SearchAction {
 /// Comparison / matching operations supported
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchOp {
-    Eq,       // contains (partial match)
-    EqExact,  // exact equality (==)
-    NotEq,    // not equal (!=)
+    Eq,      // contains (partial match)
+    EqExact, // exact equality (==)
+    NotEq,   // not equal (!=)
     Gt,
     Lt,
     Ge,
@@ -93,7 +93,11 @@ impl Filter {
                         "<=" => SearchOp::Le,
                         _ => SearchOp::Contains,
                     };
-                    exprs.push(SearchExpr { key, op: op_enum, value: val });
+                    exprs.push(SearchExpr {
+                        key,
+                        op: op_enum,
+                        value: val,
+                    });
                     break;
                 }
             }
@@ -121,13 +125,12 @@ impl Filter {
         } else {
             "Press / to search".into()
         };
-        let p = Paragraph::new(hint)
-            .block(
-                Block::bordered()
-                    .title(" Search ")
-                    .border_set(border::ROUNDED)
-                    .border_type(ratatui::widgets::BorderType::Rounded),
-            );
+        let p = Paragraph::new(hint).block(
+            Block::bordered()
+                .title(" Search ")
+                .border_set(border::ROUNDED)
+                .border_type(ratatui::widgets::BorderType::Rounded),
+        );
         frame.render_widget(p, area);
 
         if self.in_search {

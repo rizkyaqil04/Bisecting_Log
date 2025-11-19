@@ -1,7 +1,7 @@
 use ratatui::{
-    prelude::{Frame, Rect, Layout, Direction, Constraint},
-    widgets::{Gauge, Block, Borders, Paragraph},
+    prelude::{Constraint, Direction, Frame, Layout, Rect},
     style::Style,
+    widgets::{Block, Borders, Gauge, Paragraph},
 };
 
 #[derive(Clone)]
@@ -17,7 +17,13 @@ pub struct GaugeState {
 
 impl GaugeState {
     pub fn new() -> Self {
-        Self { progress: 0, status: "Initializing...".into(), done: false, message: None, message_error: false }
+        Self {
+            progress: 0,
+            status: "Initializing...".into(),
+            done: false,
+            message: None,
+            message_error: false,
+        }
     }
 
     /// Update the gauge state from a single message line coming from the python runner.
@@ -54,7 +60,10 @@ impl GaugeState {
         }
 
         // Heuristic: treat any line that looks like a Python traceback or exception as an error
-        if msg.contains("Traceback") || msg.contains("Exception") || msg.contains("Traceback (most recent call last)") {
+        if msg.contains("Traceback")
+            || msg.contains("Exception")
+            || msg.contains("Traceback (most recent call last)")
+        {
             self.message = Some(msg.to_string());
             self.message_error = true;
             return;
@@ -74,11 +83,19 @@ pub fn render_gauge_ui(f: &mut Frame, gauge: &GaugeState) {
     // compute box size (percentage of terminal with sensible minima)
     let box_width = {
         let w = (area.width as f32 * 0.6) as u16;
-        if w < 40 { std::cmp::max(20, area.width.saturating_sub(8)) } else { std::cmp::min(w, area.width.saturating_sub(4)) }
+        if w < 40 {
+            std::cmp::max(20, area.width.saturating_sub(8))
+        } else {
+            std::cmp::min(w, area.width.saturating_sub(4))
+        }
     };
     let box_height = {
         let h = (area.height as f32 * 0.45) as u16;
-        if h < 8 { std::cmp::max(6, area.height.saturating_sub(6)) } else { std::cmp::min(h, area.height.saturating_sub(2)) }
+        if h < 8 {
+            std::cmp::max(6, area.height.saturating_sub(6))
+        } else {
+            std::cmp::min(h, area.height.saturating_sub(2))
+        }
     };
 
     let x_offset = (area.width.saturating_sub(box_width)) / 2;
@@ -125,8 +142,8 @@ pub fn render_gauge_ui(f: &mut Frame, gauge: &GaugeState) {
         };
 
         let paragraph = Paragraph::new(msg.clone())
-            .style(style)        // hanya isi yang diwarnai
-            .block(msg_block);    // border tidak ikut berubah
+            .style(style) // hanya isi yang diwarnai
+            .block(msg_block); // border tidak ikut berubah
 
         f.render_widget(paragraph, chunks[2]);
     } else {

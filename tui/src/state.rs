@@ -1,8 +1,9 @@
-use crate::terminal_check::{is_too_small, draw_too_small_warning};
+use crate::detail::DataDetail;
 use crate::float::{Float, FloatContent};
 use crate::hint::Shortcut;
-use crate::sort::{SortMenu, SortOrder};
 use crate::quit::ConfirmQuit;
+use crate::sort::{SortMenu, SortOrder};
+use crate::terminal_check::{draw_too_small_warning, is_too_small};
 use crate::{
     cli::Args,
     data::{ClusterIndex, Table},
@@ -17,7 +18,6 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row},
 };
 use std::{path::PathBuf, time::Duration};
-use crate::detail::DataDetail;
 
 const TABLE_PAGE_SIZE: usize = 50;
 
@@ -169,11 +169,7 @@ impl App {
 
         match code {
             Char('q') => {
-                self.confirm_quit = Some(Float::new_absolute(
-                    Box::new(ConfirmQuit::new()),
-                    40,
-                    6,
-                ));
+                self.confirm_quit = Some(Float::new_absolute(Box::new(ConfirmQuit::new()), 40, 6));
                 return true;
             }
             Char('/') => {
@@ -249,7 +245,7 @@ impl App {
             return true;
         }
 
-            // Normal cluster table navigation
+        // Normal cluster table navigation
         match code {
             // Down/Up move the focus within the current page; clamp by current page length
             Down | Char('j') => {
@@ -258,12 +254,22 @@ impl App {
                 if let Some(cid) = self.selected_cluster_id {
                     if self.cached_cluster_id == Some(cid) {
                         let total_rows = self.cached_filtered_rows.len();
-                        let total_pages = if total_rows == 0 { 1 } else { (total_rows + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
-                        let page = if self.table_page >= total_pages { total_pages.saturating_sub(1) } else { self.table_page };
+                        let total_pages = if total_rows == 0 {
+                            1
+                        } else {
+                            (total_rows + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE
+                        };
+                        let page = if self.table_page >= total_pages {
+                            total_pages.saturating_sub(1)
+                        } else {
+                            self.table_page
+                        };
                         let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
                         let page_end = (page_start + TABLE_PAGE_SIZE).min(total_rows);
                         page_len = page_end.saturating_sub(page_start);
-                        if page_len == 0 { page_len = 1; }
+                        if page_len == 0 {
+                            page_len = 1;
+                        }
                     }
                 }
 
@@ -301,12 +307,24 @@ impl App {
             Enter => {
                 // open detail float for the selected row on current page
                 // compute cached rows reference
-                if let Some((cluster_id, _)) = self.filtered_clusters().get(self.list_state.selected().unwrap_or(0)).cloned() {
+                if let Some((cluster_id, _)) = self
+                    .filtered_clusters()
+                    .get(self.list_state.selected().unwrap_or(0))
+                    .cloned()
+                {
                     if let Some(cached_cid) = self.cached_cluster_id {
                         if cached_cid == cluster_id {
                             let total = self.cached_filtered_rows.len();
-                            let total_pages = if total == 0 { 1 } else { (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
-                            let page = if self.table_page >= total_pages { total_pages.saturating_sub(1) } else { self.table_page };
+                            let total_pages = if total == 0 {
+                                1
+                            } else {
+                                (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE
+                            };
+                            let page = if self.table_page >= total_pages {
+                                total_pages.saturating_sub(1)
+                            } else {
+                                self.table_page
+                            };
                             let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
                             let page_end = (page_start + TABLE_PAGE_SIZE).min(total);
                             let page_len = page_end.saturating_sub(page_start);
@@ -322,7 +340,8 @@ impl App {
                                         }
                                         // push detail float
                                         let detail = DataDetail::new(lines);
-                                        self.detail_float = Some(Float::new_absolute(Box::new(detail), 60, 12));
+                                        self.detail_float =
+                                            Some(Float::new_absolute(Box::new(detail), 60, 12));
                                     }
                                 }
                             }
@@ -482,7 +501,8 @@ impl App {
             if let Some(ref q) = query {
                 q.exprs.iter().all(|expr| {
                     if expr.key.is_empty() {
-                        row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
+                        row.iter()
+                            .any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
                     } else if let Some(idx) = headers.iter().position(|h| h == &expr.key) {
                         let val = &row[idx].to_lowercase();
                         let val_num = val.parse::<f64>().ok();
@@ -490,12 +510,24 @@ impl App {
                         match expr.op {
                             crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
                             crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
-                            crate::filter::SearchOp::NotEq => !val.contains(&expr.value.to_lowercase()),
-                            crate::filter::SearchOp::Gt => val_num.zip(target_num).map_or(false, |(a, b)| a > b),
-                            crate::filter::SearchOp::Lt => val_num.zip(target_num).map_or(false, |(a, b)| a < b),
-                            crate::filter::SearchOp::Ge => val_num.zip(target_num).map_or(false, |(a, b)| a >= b),
-                            crate::filter::SearchOp::Le => val_num.zip(target_num).map_or(false, |(a, b)| a <= b),
-                            crate::filter::SearchOp::Contains => val.contains(&expr.value.to_lowercase()),
+                            crate::filter::SearchOp::NotEq => {
+                                !val.contains(&expr.value.to_lowercase())
+                            }
+                            crate::filter::SearchOp::Gt => {
+                                val_num.zip(target_num).map_or(false, |(a, b)| a > b)
+                            }
+                            crate::filter::SearchOp::Lt => {
+                                val_num.zip(target_num).map_or(false, |(a, b)| a < b)
+                            }
+                            crate::filter::SearchOp::Ge => {
+                                val_num.zip(target_num).map_or(false, |(a, b)| a >= b)
+                            }
+                            crate::filter::SearchOp::Le => {
+                                val_num.zip(target_num).map_or(false, |(a, b)| a <= b)
+                            }
+                            crate::filter::SearchOp::Contains => {
+                                val.contains(&expr.value.to_lowercase())
+                            }
                         }
                     } else {
                         false
@@ -514,7 +546,9 @@ impl App {
 
         // Iterate clusters and advance their scanning progress up to the budget
         for cache_entry in &mut self.cluster_list_cache {
-            if budget_left == 0 { break; }
+            if budget_left == 0 {
+                break;
+            }
             // find the cluster struct
             if let Some(c) = self.index.clusters.iter().find(|cc| cc.id == cache_entry.0) {
                 let total_rows = c.rows_idx.len();
@@ -540,7 +574,6 @@ impl App {
         }
         out
     }
-
 
     fn draw_cluster_list(&mut self, f: &mut Frame, area: Rect) {
         let items = self
@@ -598,20 +631,40 @@ impl App {
                             if let Some(ref q) = query {
                                 ok = q.exprs.iter().all(|expr| {
                                     if expr.key.is_empty() {
-                                        row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
-                                    } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
+                                        row.iter().any(|v| {
+                                            v.to_lowercase().contains(&expr.value.to_lowercase())
+                                        })
+                                    } else if let Some(idx) =
+                                        self.table.headers.iter().position(|h| h == &expr.key)
+                                    {
                                         let val = &row[idx].to_lowercase();
                                         let val_num = val.parse::<f64>().ok();
                                         let target_num = expr.value.parse::<f64>().ok();
                                         match expr.op {
-                                            crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
-                                            crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
-                                            crate::filter::SearchOp::NotEq => !val.contains(&expr.value.to_lowercase()),
-                                            crate::filter::SearchOp::Gt => val_num.zip(target_num).map_or(false, |(a, b)| a > b),
-                                            crate::filter::SearchOp::Lt => val_num.zip(target_num).map_or(false, |(a, b)| a < b),
-                                            crate::filter::SearchOp::Ge => val_num.zip(target_num).map_or(false, |(a, b)| a >= b),
-                                            crate::filter::SearchOp::Le => val_num.zip(target_num).map_or(false, |(a, b)| a <= b),
-                                            crate::filter::SearchOp::Contains => val.contains(&expr.value.to_lowercase()),
+                                            crate::filter::SearchOp::Eq => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::EqExact => {
+                                                val == &expr.value.to_lowercase()
+                                            }
+                                            crate::filter::SearchOp::NotEq => {
+                                                !val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::Gt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a > b),
+                                            crate::filter::SearchOp::Lt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a < b),
+                                            crate::filter::SearchOp::Ge => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a >= b),
+                                            crate::filter::SearchOp::Le => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a <= b),
+                                            crate::filter::SearchOp::Contains => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
                                         }
                                     } else {
                                         false
@@ -622,7 +675,9 @@ impl App {
                             } else {
                                 ok = row.iter().any(|v| v.to_lowercase().contains(&term));
                             }
-                            if ok { filtered_rows.push(ri); }
+                            if ok {
+                                filtered_rows.push(ri);
+                            }
                         }
                     }
                 }
@@ -630,8 +685,11 @@ impl App {
                 // Tambahkan pesan jika hasil kosong
                 if filtered_rows.is_empty() {
                     lines.push(
-                        Line::from("No matching entries found.")
-                            .style(Style::default().fg(self.theme.unfocused_color()).add_modifier(Modifier::ITALIC)),
+                        Line::from("No matching entries found.").style(
+                            Style::default()
+                                .fg(self.theme.unfocused_color())
+                                .add_modifier(Modifier::ITALIC),
+                        ),
                     );
                 }
 
@@ -668,7 +726,11 @@ impl App {
         // Prefer `selected_cluster_id` (set when user selected a cluster in ClusterList).
         // If it's missing or not present in current filtered list, fall back to the first cluster.
         let target = if let Some(sel_cid) = self.selected_cluster_id {
-            filtered.iter().find(|(id, _)| *id == sel_cid).copied().or_else(|| filtered.get(0).copied())
+            filtered
+                .iter()
+                .find(|(id, _)| *id == sel_cid)
+                .copied()
+                .or_else(|| filtered.get(0).copied())
         } else {
             filtered.get(0).copied()
         };
@@ -740,20 +802,40 @@ impl App {
                         let ok = if let Some(ref q) = query {
                             q.exprs.iter().all(|expr| {
                                 if expr.key.is_empty() {
-                                    row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
-                                } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
+                                    row.iter().any(|v| {
+                                        v.to_lowercase().contains(&expr.value.to_lowercase())
+                                    })
+                                } else if let Some(idx) =
+                                    self.table.headers.iter().position(|h| h == &expr.key)
+                                {
                                     let val = &row[idx].to_lowercase();
                                     let val_num = val.parse::<f64>().ok();
                                     let target_num = expr.value.parse::<f64>().ok();
                                     match expr.op {
-                                        crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
-                                        crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
-                                        crate::filter::SearchOp::NotEq => !val.contains(&expr.value.to_lowercase()),
-                                        crate::filter::SearchOp::Gt => val_num.zip(target_num).map_or(false, |(a, b)| a > b),
-                                        crate::filter::SearchOp::Lt => val_num.zip(target_num).map_or(false, |(a, b)| a < b),
-                                        crate::filter::SearchOp::Ge => val_num.zip(target_num).map_or(false, |(a, b)| a >= b),
-                                        crate::filter::SearchOp::Le => val_num.zip(target_num).map_or(false, |(a, b)| a <= b),
-                                        crate::filter::SearchOp::Contains => val.contains(&expr.value.to_lowercase()),
+                                        crate::filter::SearchOp::Eq => {
+                                            val.contains(&expr.value.to_lowercase())
+                                        }
+                                        crate::filter::SearchOp::EqExact => {
+                                            val == &expr.value.to_lowercase()
+                                        }
+                                        crate::filter::SearchOp::NotEq => {
+                                            !val.contains(&expr.value.to_lowercase())
+                                        }
+                                        crate::filter::SearchOp::Gt => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a > b)
+                                        }
+                                        crate::filter::SearchOp::Lt => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a < b)
+                                        }
+                                        crate::filter::SearchOp::Ge => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a >= b)
+                                        }
+                                        crate::filter::SearchOp::Le => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a <= b)
+                                        }
+                                        crate::filter::SearchOp::Contains => {
+                                            val.contains(&expr.value.to_lowercase())
+                                        }
                                     }
                                 } else {
                                     false
@@ -764,7 +846,9 @@ impl App {
                         } else {
                             row.iter().any(|v| v.to_lowercase().contains(&term))
                         };
-                        if ok { self.cached_filtered_rows.push(ri); }
+                        if ok {
+                            self.cached_filtered_rows.push(ri);
+                        }
                     }
                 }
                 self.cached_cluster_id = Some(cluster_id);
@@ -790,11 +874,18 @@ impl App {
             let mut rows = Vec::new();
             // TABLE ROWS — compute page start/limits and clamp
             let total = filtered_rows_idx.len();
-            let total_pages = if total == 0 { 1 } else { (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
+            let total_pages = if total == 0 {
+                1
+            } else {
+                (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE
+            };
 
             // Compute the absolute selected index from current page/scroll and ensure page/scroll
             // are adjusted so the selected row remains visible (scroll-to-selected).
-            let mut abs_selected = self.table_page.saturating_mul(TABLE_PAGE_SIZE).saturating_add(self.table_scroll);
+            let mut abs_selected = self
+                .table_page
+                .saturating_mul(TABLE_PAGE_SIZE)
+                .saturating_add(self.table_scroll);
             if total == 0 {
                 abs_selected = 0;
                 self.table_page = 0;
@@ -813,7 +904,9 @@ impl App {
             let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
             let page_end = (page_start + TABLE_PAGE_SIZE).min(total);
             let mut page_len = page_end.saturating_sub(page_start);
-            if page_len == 0 { page_len = 1; }
+            if page_len == 0 {
+                page_len = 1;
+            }
             // adjust table_scroll to be relative to current page and within visible range
             if total == 0 {
                 self.table_scroll = 0;
@@ -826,7 +919,9 @@ impl App {
             // Estimate number of visible rows inside the table area: subtract 1 for table header and 2 for borders
             let table_area_height = layout[1].height as usize;
             let mut visible_rows = table_area_height.saturating_sub(3);
-            if visible_rows == 0 { visible_rows = 1; }
+            if visible_rows == 0 {
+                visible_rows = 1;
+            }
 
             // Clamp view offset so it fits within page bounds
             if page_len <= visible_rows {
@@ -839,7 +934,10 @@ impl App {
             if self.table_scroll < self.table_view_offset {
                 self.table_view_offset = self.table_scroll;
             } else if self.table_scroll >= self.table_view_offset + visible_rows {
-                self.table_view_offset = self.table_scroll.saturating_add(1).saturating_sub(visible_rows);
+                self.table_view_offset = self
+                    .table_scroll
+                    .saturating_add(1)
+                    .saturating_sub(visible_rows);
             }
 
             // Render only the slice visible inside the current page viewport
@@ -867,9 +965,9 @@ impl App {
                     Style::default().bg(bg)
                 };
 
-                rows.push(Row::new(r.into_iter().map(|v| {
-                    Cell::from(v).style(cell_style_base)
-                })));
+                rows.push(Row::new(
+                    r.into_iter().map(|v| Cell::from(v).style(cell_style_base)),
+                ));
             }
 
             let table = ratatui::widgets::Table::new(rows, self.auto_widths(area.width))
@@ -959,7 +1057,10 @@ impl App {
                     let vb_num = vb.parse::<f64>();
 
                     let ord = if va_num.is_ok() && vb_num.is_ok() {
-                        va_num.unwrap().partial_cmp(&vb_num.unwrap()).unwrap_or(std::cmp::Ordering::Equal)
+                        va_num
+                            .unwrap()
+                            .partial_cmp(&vb_num.unwrap())
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     } else {
                         va.cmp(&vb)
                     };

@@ -1,8 +1,5 @@
-use ratatui::{
-    layout::Rect,
-    Frame,
-};
 use crate::{float::FloatContent, hint::Shortcut, theme::Theme};
+use ratatui::{Frame, layout::Rect};
 
 /// Simple floating window for confirming application exit.
 /// Press [y] to confirm exit, [n] or [Esc] to cancel.
@@ -27,9 +24,9 @@ impl ConfirmQuit {
 impl FloatContent for ConfirmQuit {
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::{
-            style::{Style, Modifier},
-            widgets::{Block, Borders, BorderType, Clear, Paragraph},
             layout::Alignment,
+            style::{Modifier, Style},
+            widgets::{Block, BorderType, Borders, Clear, Paragraph},
         };
 
         // Dimmed overlay to prevent background content from showing through
@@ -46,10 +43,15 @@ impl FloatContent for ConfirmQuit {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border_color()));
 
-        let text = Paragraph::new("Are you sure you want to exit?\n\n\n[y] Yes              [n] No")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(theme.info_color()).add_modifier(Modifier::BOLD))
-            .block(block);
+        let text =
+            Paragraph::new("Are you sure you want to exit?\n\n\n[y] Yes              [n] No")
+                .alignment(Alignment::Center)
+                .style(
+                    Style::default()
+                        .fg(theme.info_color())
+                        .add_modifier(Modifier::BOLD),
+                )
+                .block(block);
 
         frame.render_widget(text, area);
     }
@@ -77,10 +79,7 @@ impl FloatContent for ConfirmQuit {
     fn get_shortcut_list(&self) -> (&str, Box<[Shortcut]>) {
         (
             "Quit Confirmation",
-            crate::shortcuts!(
-                ("Confirm quit", ["y"]),
-                ("Cancel", ["n", "Esc"])
-            ),
+            crate::shortcuts!(("Confirm quit", ["y"]), ("Cancel", ["n", "Esc"])),
         )
     }
 }

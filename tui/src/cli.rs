@@ -1,7 +1,7 @@
-use clap::{Parser, CommandFactory};
-use std::path::PathBuf;
-use anyhow::{Result, bail, Context};
+use anyhow::{Context, Result, bail};
+use clap::{CommandFactory, Parser};
 use ratatui::crossterm::style::Stylize;
+use std::path::PathBuf;
 
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
@@ -96,8 +96,7 @@ impl Args {
                 // Tampilkan help kalau tidak ada argumen sama sekali
                 println!("{} No argument given", "[ERROR]".red().bold());
                 let mut cmd = Args::command();
-                cmd.print_help()
-                    .expect("Failed to print help message");
+                cmd.print_help().expect("Failed to print help message");
                 println!(); // newline biar rapi
                 std::process::exit(1);
             }
