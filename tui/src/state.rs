@@ -17,6 +17,9 @@ use ratatui::{
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row},
 };
 use std::{path::PathBuf, time::Duration};
+use crate::detail::DataDetail;
+
+const TABLE_PAGE_SIZE: usize = 50;
 
 pub enum Mode {
     ClusterList,
@@ -32,11 +35,20 @@ pub struct App {
     selected_cluster_id: Option<usize>,
     list_state: ratatui::widgets::ListState,
     table_scroll: usize,
+    table_page: usize,
+    table_view_offset: usize,
+    // cache filtered rows for the currently selected cluster to avoid rescanning
+    cached_cluster_id: Option<usize>,
+    cached_filtered_rows: Vec<usize>,
     filter: Filter,
+    // incremental scan cache for ClusterList filtering: (cluster_id, matched_count, next_row_index)
+    cluster_list_cache_key: Option<String>,
+    cluster_list_cache: Vec<(usize, usize, usize)>,
     input_path: PathBuf,
     sort_menu: Option<Float<SortMenu>>,
     current_sort: (String, SortOrder),
     confirm_quit: Option<Float<ConfirmQuit>>,
+    detail_float: Option<Float<DataDetail>>,
 }
 
 impl App {
@@ -57,6 +69,13 @@ impl App {
             selected_cluster_id: None,
             list_state,
             table_scroll: 0,
+            table_page: 0,
+            table_view_offset: 0,
+            cached_cluster_id: None,
+            cached_filtered_rows: Vec::new(),
+            detail_float: None,
+            cluster_list_cache_key: None,
+            cluster_list_cache: Vec::new(),
             filter: Filter::default(),
             input_path: csv_path.clone(),
             sort_menu: None,
@@ -90,6 +109,16 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode) -> bool {
+        // Floating windows take priority: detail float, then confirm quit.
+        if let Some(ref mut float) = self.detail_float {
+            let dummy_event = ratatui::crossterm::event::KeyEvent::from(code);
+            let finished = float.handle_key_event(&dummy_event);
+            if finished && float.content.is_finished() {
+                self.detail_float = None;
+            }
+            return true;
+        }
+
         // Tangani konfirmasi keluar (popup float)
         if let Some(ref mut float) = self.confirm_quit {
             let dummy_event = ratatui::crossterm::event::KeyEvent::from(code);
@@ -161,6 +190,11 @@ impl App {
                 }
                 self.mode = Mode::ClusterTable;
                 self.table_scroll = 0;
+                self.table_page = 0;
+                self.table_view_offset = 0;
+                // Invalidate cached filtered rows so table will recompute using current filter/sort
+                self.cached_cluster_id = None;
+                self.cached_filtered_rows.clear();
             }
             _ => {}
         }
@@ -202,31 +236,99 @@ impl App {
                 crate::filter::SearchAction::Exit => {
                     self.filter.deactivate();
                 }
-                crate::filter::SearchAction::Update => {}
+                crate::filter::SearchAction::Update => {
+                    // When filter text changes, invalidate the cached filtered rows
+                    self.cached_cluster_id = None;
+                    self.cached_filtered_rows.clear();
+                    self.table_page = 0;
+                    self.table_scroll = 0;
+                    self.table_view_offset = 0;
+                }
                 crate::filter::SearchAction::None => {}
             }
             return true;
         }
 
-        // Normal cluster table navigation
+            // Normal cluster table navigation
         match code {
-            Char('q') => {
-                self.confirm_quit = Some(Float::new_absolute(
-                    Box::new(ConfirmQuit::new()),
-                    40,
-                    6,
-                ));
-                return true;
+            // Down/Up move the focus within the current page; clamp by current page length
+            Down | Char('j') => {
+                // Determine current page length and handle moving past page bottom
+                let mut page_len = TABLE_PAGE_SIZE;
+                if let Some(cid) = self.selected_cluster_id {
+                    if self.cached_cluster_id == Some(cid) {
+                        let total_rows = self.cached_filtered_rows.len();
+                        let total_pages = if total_rows == 0 { 1 } else { (total_rows + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
+                        let page = if self.table_page >= total_pages { total_pages.saturating_sub(1) } else { self.table_page };
+                        let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
+                        let page_end = (page_start + TABLE_PAGE_SIZE).min(total_rows);
+                        page_len = page_end.saturating_sub(page_start);
+                        if page_len == 0 { page_len = 1; }
+                    }
+                }
+
+                // If not at bottom of current page, move cursor down within page.
+                // Do NOT auto-advance to next page when hitting the bottom —
+                // page navigation is controlled by Left/Right keys only.
+                if self.table_scroll + 1 < page_len {
+                    self.table_scroll = self.table_scroll.saturating_add(1);
+                }
             }
-            Left | Char('h') | Esc => {
+            Up | Char('k') => {
+                if self.table_scroll > 0 {
+                    self.table_scroll = self.table_scroll.saturating_sub(1);
+                }
+            }
+            Left | Char('h') => {
+                // previous page
+                if self.table_page > 0 {
+                    self.table_page = self.table_page.saturating_sub(1);
+                }
+                self.table_scroll = 0;
+                self.table_view_offset = 0;
+            }
+            Right | Char('l') => {
+                // next page
+                self.table_page = self.table_page.saturating_add(1);
+                self.table_scroll = 0;
+                self.table_view_offset = 0;
+            }
+            Char('q') => {
+                // Back to cluster list (do not quit here). 'q' is the ONLY back key in ClusterTable.
                 self.mode = Mode::ClusterList;
                 self.selected_cluster_id = None;
             }
-            Down | Char('j') => {
-                self.table_scroll = self.table_scroll.saturating_add(1);
-            }
-            Up | Char('k') => {
-                self.table_scroll = self.table_scroll.saturating_sub(1);
+            Enter => {
+                // open detail float for the selected row on current page
+                // compute cached rows reference
+                if let Some((cluster_id, _)) = self.filtered_clusters().get(self.list_state.selected().unwrap_or(0)).cloned() {
+                    if let Some(cached_cid) = self.cached_cluster_id {
+                        if cached_cid == cluster_id {
+                            let total = self.cached_filtered_rows.len();
+                            let total_pages = if total == 0 { 1 } else { (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
+                            let page = if self.table_page >= total_pages { total_pages.saturating_sub(1) } else { self.table_page };
+                            let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
+                            let page_end = (page_start + TABLE_PAGE_SIZE).min(total);
+                            let page_len = page_end.saturating_sub(page_start);
+                            let idx_in_page = self.table_scroll.min(page_len.saturating_sub(1));
+                            let abs_idx = page_start.saturating_add(idx_in_page);
+                            if abs_idx < total {
+                                if let Some(&ri) = self.cached_filtered_rows.get(abs_idx) {
+                                    if let Ok(row) = self.table.get_row(ri) {
+                                        // build detail lines from headers
+                                        let mut lines = Vec::new();
+                                        for (h, v) in self.table.headers.iter().zip(row.iter()) {
+                                            lines.push(format!("{}: {}", h, v));
+                                        }
+                                        // push detail float
+                                        let detail = DataDetail::new(lines);
+                                        self.detail_float = Some(Float::new_absolute(Box::new(detail), 60, 12));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Char('/') => {
                 self.filter.activate();
@@ -330,8 +432,12 @@ impl App {
 
         // HINT WINDOW
         self.draw_hint(f, chunks[2]);
-
         if let Some(ref mut float) = self.confirm_quit {
+            float.draw(f, f.area(), &self.theme);
+        }
+
+        // Draw detail float (top-most) if present
+        if let Some(ref mut float) = self.detail_float {
             float.draw(f, f.area(), &self.theme);
         }
     }
@@ -343,22 +449,44 @@ impl App {
         }
     }
 
-    fn filtered_clusters(&self) -> Vec<(usize, usize)> {
+    fn filtered_clusters(&mut self) -> Vec<(usize, usize)> {
+        // Incremental cached cluster counting for ClusterList to avoid scanning entire dataset
         let query = self.filter.parsed_query(); // ambil beberapa ekspresi terstruktur
         let term = self.filter.term().to_lowercase();
 
+        // If no filter, return exact counts cheaply
+        if query.is_none() && term.is_empty() {
+            return self
+                .index
+                .clusters
+                .iter()
+                .map(|c| (c.id, c.rows_idx.len()))
+                .collect::<Vec<_>>();
+        }
+
+        // Build a simple key representing current filter to detect changes
+        let filter_key = format!("{:?}|{}", query, term);
+
+        // If cache key changed, reset cache
+        if self.cluster_list_cache_key.as_deref() != Some(&filter_key) {
+            self.cluster_list_cache_key = Some(filter_key.clone());
+            self.cluster_list_cache.clear();
+            for c in &self.index.clusters {
+                self.cluster_list_cache.push((c.id, 0usize, 0usize));
+            }
+        }
+
+        // Helper to test a row against current query/term
+        let headers = self.table.headers.clone();
         let matches_row = |row: &Vec<String>| -> bool {
             if let Some(ref q) = query {
-                // Semua kondisi (expr) harus cocok => AND logic
                 q.exprs.iter().all(|expr| {
                     if expr.key.is_empty() {
-                        // jika tanpa key (misal: cuma ketik "admin")
                         row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
-                    } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
+                    } else if let Some(idx) = headers.iter().position(|h| h == &expr.key) {
                         let val = &row[idx].to_lowercase();
                         let val_num = val.parse::<f64>().ok();
                         let target_num = expr.value.parse::<f64>().ok();
-
                         match expr.op {
                             crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
                             crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
@@ -376,39 +504,40 @@ impl App {
             } else if term.is_empty() {
                 true
             } else {
-                // fallback: simple contains search
                 row.iter().any(|v| v.to_lowercase().contains(&term))
             }
         };
 
-        let mut out = Vec::new();
-        match self.mode {
-            Mode::ClusterList => {
-                for c in &self.index.clusters {
-                    let count = c.rows_idx
-                        .iter()
-                        .filter(|&&ri| matches_row(&self.table.rows[ri]))
-                        .count();
-                    if count > 0 {
-                        out.push((c.id, count));
-                    }
-                }
-            }
-            Mode::ClusterTable => {
-                if let Some(cid) = self.selected_cluster_id {
-                    if let Some(c) = self.index.clusters.iter().find(|c| c.id == cid) {
-                        let count = c.rows_idx
-                            .iter()
-                            .filter(|&&ri| matches_row(&self.table.rows[ri]))
-                            .count();
-                        if count > 0 {
-                            out.push((c.id, count));
+        // Incremental scanning budget per call (to keep UI responsive)
+        const BUDGET: usize = 800; // total rows to check across clusters per invocation
+        let mut budget_left = BUDGET;
+
+        // Iterate clusters and advance their scanning progress up to the budget
+        for cache_entry in &mut self.cluster_list_cache {
+            if budget_left == 0 { break; }
+            // find the cluster struct
+            if let Some(c) = self.index.clusters.iter().find(|cc| cc.id == cache_entry.0) {
+                let total_rows = c.rows_idx.len();
+                while cache_entry.2 < total_rows && budget_left > 0 {
+                    let ri = c.rows_idx[cache_entry.2];
+                    cache_entry.2 += 1;
+                    budget_left = budget_left.saturating_sub(1);
+                    if let Ok(row) = self.table.get_row(ri) {
+                        if matches_row(&row) {
+                            cache_entry.1 = cache_entry.1.saturating_add(1);
                         }
                     }
                 }
             }
         }
 
+        // Produce the output vector from current cache counts (may be partial during scanning)
+        let mut out = Vec::new();
+        for (id, count, _) in &self.cluster_list_cache {
+            if *count > 0 {
+                out.push((*id, *count));
+            }
+        }
         out
     }
 
@@ -437,7 +566,7 @@ impl App {
         f.render_stateful_widget(list, area, &mut self.list_state);
     }
 
-    fn draw_preview(&self, f: &mut Frame, area: Rect) {
+    fn draw_preview(&mut self, f: &mut Frame, area: Rect) {
         // tampilkan beberapa baris dari cluster terpilih, TERFILTER oleh search
         let filtered = self.filtered_clusters();
         let idx = self.list_state.selected().unwrap_or(0);
@@ -459,17 +588,15 @@ impl App {
                 let query = self.filter.parsed_query();
                 let term = self.filter.term().to_lowercase();
 
-                let filtered_rows = if term.is_empty() && query.is_none() {
-                    c.rows_idx.iter().cloned().collect::<Vec<_>>()
+                let mut filtered_rows: Vec<usize> = Vec::new();
+                if term.is_empty() && query.is_none() {
+                    filtered_rows = c.rows_idx.iter().cloned().collect::<Vec<_>>();
                 } else {
-                    c.rows_idx
-                        .iter()
-                        .cloned()
-                        .filter(|&ri| {
-                            let row = &self.table.rows[ri];
+                    for &ri in &c.rows_idx {
+                        if let Ok(row) = self.table.get_row(ri) {
+                            let ok;
                             if let Some(ref q) = query {
-                                // Semua ekspresi harus cocok
-                                q.exprs.iter().all(|expr| {
+                                ok = q.exprs.iter().all(|expr| {
                                     if expr.key.is_empty() {
                                         row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
                                     } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
@@ -489,31 +616,37 @@ impl App {
                                     } else {
                                         false
                                     }
-                                })
+                                });
+                            } else if term.is_empty() {
+                                ok = true;
                             } else {
-                                row.iter().any(|v| v.to_lowercase().contains(&term))
+                                ok = row.iter().any(|v| v.to_lowercase().contains(&term));
                             }
-                        })
-                        .collect::<Vec<_>>()
-                };
+                            if ok { filtered_rows.push(ri); }
+                        }
+                    }
+                }
 
                 // Tambahkan pesan jika hasil kosong
                 if filtered_rows.is_empty() {
                     lines.push(
                         Line::from("No matching entries found.")
-                            .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                            .style(Style::default().fg(self.theme.unfocused_color()).add_modifier(Modifier::ITALIC)),
                     );
                 }
 
                 // Render maksimal 10 baris hasil
                 for &ri in filtered_rows.iter().take(10) {
-                    let row = &self.table.rows[ri];
+                    let row = match self.table.get_row(ri) {
+                        Ok(r) => r,
+                        Err(_) => Vec::new(),
+                    };
                     // bentuk ringkas: ip method url status size
-                    let ip = self.pick("ip", row).unwrap_or_default();
-                    let method = self.pick("method", row).unwrap_or_default();
-                    let url = self.pick("url", row).unwrap_or_default();
-                    let status = self.pick("status", row).unwrap_or_default();
-                    let size = self.pick("size", row).unwrap_or_default();
+                    let ip = self.pick("ip", &row).unwrap_or_default();
+                    let method = self.pick("method", &row).unwrap_or_default();
+                    let url = self.pick("url", &row).unwrap_or_default();
+                    let status = self.pick("status", &row).unwrap_or_default();
+                    let size = self.pick("size", &row).unwrap_or_default();
                     lines.push(Line::from(format!("{ip} {method} {url} {status} {size}")));
                 }
             }
@@ -530,7 +663,15 @@ impl App {
 
     fn draw_table(&mut self, f: &mut Frame, area: Rect) {
         let filtered = self.filtered_clusters();
-        let idx = 0; // Selalu 0 karena hanya satu cluster di ClusterTable
+
+        // Determine which cluster to display in ClusterTable.
+        // Prefer `selected_cluster_id` (set when user selected a cluster in ClusterList).
+        // If it's missing or not present in current filtered list, fall back to the first cluster.
+        let target = if let Some(sel_cid) = self.selected_cluster_id {
+            filtered.iter().find(|(id, _)| *id == sel_cid).copied().or_else(|| filtered.get(0).copied())
+        } else {
+            filtered.get(0).copied()
+        };
 
         // === Split area jadi dua bagian besar: Header bar dan Tabel ===
         let layout = Layout::default()
@@ -576,7 +717,7 @@ impl App {
 
         f.render_widget(sort_para, header_chunks[1]);
 
-        if let Some((cluster_id, _count)) = filtered.get(idx).copied() {
+        if let Some((cluster_id, _count)) = target {
             let Some(c) = self.index.clusters.iter().find(|c| c.id == cluster_id) else {
                 let p = Paragraph::new("Tidak ada data").block(
                     Block::default()
@@ -588,48 +729,56 @@ impl App {
                 return;
             };
 
-            let query = self.filter.parsed_query();
-            let term = self.filter.term().to_lowercase();
-
-            let filtered_rows_idx: Vec<_> = c
-                .rows_idx
-                .iter()
-                .cloned()
-                .filter(|&ri| {
-                    let row = &self.table.rows[ri];
-                    if let Some(ref q) = query {
-                        // Semua ekspresi dalam query harus cocok (AND logic)
-                        q.exprs.iter().all(|expr| {
-                            if expr.key.is_empty() {
-                                row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
-                            } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
-                                let val = &row[idx].to_lowercase();
-                                let val_num = val.parse::<f64>().ok();
-                                let target_num = expr.value.parse::<f64>().ok();
-                                match expr.op {
-                                    crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
-                                    crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
-                                    crate::filter::SearchOp::NotEq => !val.contains(&expr.value.to_lowercase()),
-                                    crate::filter::SearchOp::Gt => val_num.zip(target_num).map_or(false, |(a, b)| a > b),
-                                    crate::filter::SearchOp::Lt => val_num.zip(target_num).map_or(false, |(a, b)| a < b),
-                                    crate::filter::SearchOp::Ge => val_num.zip(target_num).map_or(false, |(a, b)| a >= b),
-                                    crate::filter::SearchOp::Le => val_num.zip(target_num).map_or(false, |(a, b)| a <= b),
-                                    crate::filter::SearchOp::Contains => val.contains(&expr.value.to_lowercase()),
+            // Ensure we have a cached filtered list for this cluster+filter.
+            if self.cached_cluster_id != Some(cluster_id) {
+                // Recompute filtered rows (full scan) and cache the result.
+                self.cached_filtered_rows.clear();
+                let query = self.filter.parsed_query();
+                let term = self.filter.term().to_lowercase();
+                for &ri in &c.rows_idx {
+                    if let Ok(row) = self.table.get_row(ri) {
+                        let ok = if let Some(ref q) = query {
+                            q.exprs.iter().all(|expr| {
+                                if expr.key.is_empty() {
+                                    row.iter().any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
+                                } else if let Some(idx) = self.table.headers.iter().position(|h| h == &expr.key) {
+                                    let val = &row[idx].to_lowercase();
+                                    let val_num = val.parse::<f64>().ok();
+                                    let target_num = expr.value.parse::<f64>().ok();
+                                    match expr.op {
+                                        crate::filter::SearchOp::Eq => val.contains(&expr.value.to_lowercase()),
+                                        crate::filter::SearchOp::EqExact => val == &expr.value.to_lowercase(),
+                                        crate::filter::SearchOp::NotEq => !val.contains(&expr.value.to_lowercase()),
+                                        crate::filter::SearchOp::Gt => val_num.zip(target_num).map_or(false, |(a, b)| a > b),
+                                        crate::filter::SearchOp::Lt => val_num.zip(target_num).map_or(false, |(a, b)| a < b),
+                                        crate::filter::SearchOp::Ge => val_num.zip(target_num).map_or(false, |(a, b)| a >= b),
+                                        crate::filter::SearchOp::Le => val_num.zip(target_num).map_or(false, |(a, b)| a <= b),
+                                        crate::filter::SearchOp::Contains => val.contains(&expr.value.to_lowercase()),
+                                    }
+                                } else {
+                                    false
                                 }
-                            } else {
-                                false
-                            }
-                        })
-                    } else if term.is_empty() {
-                        true
-                    } else {
-                        row.iter().any(|v| v.to_lowercase().contains(&term))
+                            })
+                        } else if term.is_empty() {
+                            true
+                        } else {
+                            row.iter().any(|v| v.to_lowercase().contains(&term))
+                        };
+                        if ok { self.cached_filtered_rows.push(ri); }
                     }
-                })
-                .collect();
+                }
+                self.cached_cluster_id = Some(cluster_id);
+                // Reset page/scroll when cache recomputed
+                self.table_page = 0;
+                self.table_scroll = 0;
+                self.table_view_offset = 0;
+            }
 
-            // HEADER
-            let header = Row::new(self.table.headers.iter().map(|h| {
+            let filtered_rows_idx = &self.cached_filtered_rows;
+
+            // HEADER - clone headers to avoid holding an immutable borrow of self.table
+            let headers_clone = self.table.headers.clone();
+            let header = Row::new(headers_clone.iter().map(|h| {
                 Cell::from(h.as_str()).style(
                     Style::default()
                         .fg(self.theme.table_header())
@@ -639,25 +788,87 @@ impl App {
             }));
 
             let mut rows = Vec::new();
-            // TABLE ROWS
-            for (i, &ri) in filtered_rows_idx
-                .iter()
-                .skip(self.table_scroll)
-                .take(layout[1].height.saturating_sub(3) as usize)
-                .enumerate()
-            {
-                let r = &self.table.rows[ri];
+            // TABLE ROWS — compute page start/limits and clamp
+            let total = filtered_rows_idx.len();
+            let total_pages = if total == 0 { 1 } else { (total + TABLE_PAGE_SIZE - 1) / TABLE_PAGE_SIZE };
+
+            // Compute the absolute selected index from current page/scroll and ensure page/scroll
+            // are adjusted so the selected row remains visible (scroll-to-selected).
+            let mut abs_selected = self.table_page.saturating_mul(TABLE_PAGE_SIZE).saturating_add(self.table_scroll);
+            if total == 0 {
+                abs_selected = 0;
+                self.table_page = 0;
+                self.table_scroll = 0;
+            } else {
+                if abs_selected >= total {
+                    abs_selected = total.saturating_sub(1);
+                }
+                // compute page that contains the absolute selected and clamp into valid pages
+                let new_page = abs_selected / TABLE_PAGE_SIZE;
+                self.table_page = new_page.min(total_pages.saturating_sub(1));
+            }
+
+            // compute page bounds in outer scope so the rendering code can use them
+            let page = self.table_page;
+            let page_start = page.saturating_mul(TABLE_PAGE_SIZE);
+            let page_end = (page_start + TABLE_PAGE_SIZE).min(total);
+            let mut page_len = page_end.saturating_sub(page_start);
+            if page_len == 0 { page_len = 1; }
+            // adjust table_scroll to be relative to current page and within visible range
+            if total == 0 {
+                self.table_scroll = 0;
+            } else {
+                let rel = abs_selected.saturating_sub(page_start);
+                self.table_scroll = rel.min(page_len.saturating_sub(1));
+            }
+
+            // Compute viewport within the page (visible rows) so selection is always visible
+            // Estimate number of visible rows inside the table area: subtract 1 for table header and 2 for borders
+            let table_area_height = layout[1].height as usize;
+            let mut visible_rows = table_area_height.saturating_sub(3);
+            if visible_rows == 0 { visible_rows = 1; }
+
+            // Clamp view offset so it fits within page bounds
+            if page_len <= visible_rows {
+                self.table_view_offset = 0;
+            } else if self.table_view_offset > page_len.saturating_sub(visible_rows) {
+                self.table_view_offset = page_len.saturating_sub(visible_rows);
+            }
+
+            // Ensure selected row is within viewport; adjust view offset if needed
+            if self.table_scroll < self.table_view_offset {
+                self.table_view_offset = self.table_scroll;
+            } else if self.table_scroll >= self.table_view_offset + visible_rows {
+                self.table_view_offset = self.table_scroll.saturating_add(1).saturating_sub(visible_rows);
+            }
+
+            // Render only the slice visible inside the current page viewport
+            let view_start = page_start.saturating_add(self.table_view_offset);
+            let view_end = (view_start + visible_rows).min(page_end);
+
+            for (i, ri) in filtered_rows_idx[view_start..view_end].iter().enumerate() {
+                let r = match self.table.get_row(*ri) {
+                    Ok(v) => v,
+                    Err(_) => Vec::new(),
+                };
                 let bg = if i % 2 == 0 {
                     self.theme.table_row_even()
                 } else {
                     self.theme.table_row_odd()
                 };
-                rows.push(Row::new(r.iter().map(|v| {
-                    Cell::from(v.as_str()).style(
-                        Style::default()
-                            // .fg(self.theme.table_text())
-                            .bg(bg),
-                    )
+                // If this row is focused within the page viewport, use selection style
+                let is_focused = i == self.table_scroll.saturating_sub(self.table_view_offset);
+                let cell_style_base = if is_focused {
+                    Style::default()
+                        .bg(self.theme.selection_bg())
+                        .fg(self.theme.selection_fg())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().bg(bg)
+                };
+
+                rows.push(Row::new(r.into_iter().map(|v| {
+                    Cell::from(v).style(cell_style_base)
                 })));
             }
 
@@ -668,9 +879,11 @@ impl App {
                         .borders(Borders::ALL)
                         .border_type(ratatui::widgets::BorderType::Rounded)
                         .title(format!(
-                            " Cluster {} - {} rows ",
+                            " Cluster {} - {} rows  |  Page {}/{} ",
                             cluster_id,
-                            filtered_rows_idx.len()
+                            filtered_rows_idx.len(),
+                            page + 1,
+                            total_pages
                         )),
                 )
                 .row_highlight_style(
@@ -728,17 +941,27 @@ impl App {
         if let Some(idx) = self.table.column_index(col) {
             for c in &mut self.index.clusters {
                 c.rows_idx.sort_by(|&a, &b| {
-                    let va = &self.table.rows[a][idx];
-                    let vb = &self.table.rows[b][idx];
+                    // Read rows on-demand; fall back to empty strings if read fails
+                    let ra = match self.table.get_row(a) {
+                        Ok(v) => v,
+                        Err(_) => Vec::new(),
+                    };
+                    let rb = match self.table.get_row(b) {
+                        Ok(v) => v,
+                        Err(_) => Vec::new(),
+                    };
 
-                    // Coba parse ke f64
+                    let va = ra.get(idx).cloned().unwrap_or_default();
+                    let vb = rb.get(idx).cloned().unwrap_or_default();
+
+                    // Try parse to f64
                     let va_num = va.parse::<f64>();
                     let vb_num = vb.parse::<f64>();
 
                     let ord = if va_num.is_ok() && vb_num.is_ok() {
                         va_num.unwrap().partial_cmp(&vb_num.unwrap()).unwrap_or(std::cmp::Ordering::Equal)
                     } else {
-                        va.cmp(vb)
+                        va.cmp(&vb)
                     };
 
                     if order == SortOrder::Ascend {
@@ -748,6 +971,12 @@ impl App {
                     }
                 });
             }
+            // Sorting changed — cached filtered results may be stale
+            self.cached_cluster_id = None;
+            self.cached_filtered_rows.clear();
+            self.table_page = 0;
+            self.table_scroll = 0;
+            self.table_view_offset = 0;
         }
     }
 
@@ -799,11 +1028,12 @@ impl App {
                 Mode::ClusterTable => (
                     "Cluster Table",
                     crate::shortcuts!(
+                        ("Detail", ["Enter"]),
                         ("Scroll", ["j", "k", "↑", "↓"]),
+                        ("Page", ["h", "l", "←", "→"]),
                         ("Sort", ["s"]),
                         ("Search", ["/"]),
-                        ("Back", ["h", "←", "Esc"]),
-                        ("Quit", ["q"]),
+                        ("Back", ["q"]),
                     ),
                 ),
             }

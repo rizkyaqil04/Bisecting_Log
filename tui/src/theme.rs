@@ -8,7 +8,7 @@ pub enum Theme {
 
 impl Theme {
     pub const fn title_color(&self) -> Color {
-        Color::Yellow
+        Color::Green
     }
     pub const fn cluster_color(&self) -> Color {
         Color::Cyan
@@ -19,7 +19,6 @@ impl Theme {
     pub const fn table_header(&self) -> Color {
         Color::Black
     }
-    // pub const fn table_text(&self) -> Color { Color::White }
     pub const fn selection_bg(&self) -> Color {
         Color::Blue
     }
@@ -39,9 +38,18 @@ impl Theme {
         Color::Rgb(30, 34, 40)
     }
     pub const fn info_color(&self) -> Color {
-        Color::LightRed
+        Color::Yellow
     }
     pub const fn border_color(&self) -> Color {
         Color::LightBlue
+    }
+    pub const fn overlay_bg(&self) -> Color {
+        Color::Rgb(10, 10, 10)
+    }
+    pub const fn danger_color(&self) -> Color {
+        Color::Red
+    }
+    pub const fn table_text(&self) -> Color {
+        Color::White
     }
 }

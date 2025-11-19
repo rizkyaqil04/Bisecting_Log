@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::{Paragraph, Wrap},
     Frame,
 };
@@ -21,7 +21,7 @@ pub fn draw_too_small_warning(f: &mut Frame, area: Rect) {
         area.width, area.height, MIN_WIDTH, MIN_HEIGHT
     ))
     .alignment(Alignment::Center)
-    .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+    .style(Style::default().fg(crate::theme::Theme::Default.danger_color()).add_modifier(Modifier::BOLD))
     .wrap(Wrap { trim: true });
 
     let layout = Layout::default()

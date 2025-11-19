@@ -27,13 +27,13 @@ impl ConfirmQuit {
 impl FloatContent for ConfirmQuit {
     fn draw(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         use ratatui::{
-            style::{Style, Color, Modifier},
+            style::{Style, Modifier},
             widgets::{Block, Borders, BorderType, Clear, Paragraph},
             layout::Alignment,
         };
 
         // Dimmed overlay to prevent background content from showing through
-        let overlay = Block::default().style(Style::default().bg(Color::Rgb(10, 10, 10)));
+        let overlay = Block::default().style(Style::default().bg(theme.overlay_bg()));
         frame.render_widget(overlay, frame.area());
 
         // Clear popup area (erase buffer content)
@@ -48,7 +48,7 @@ impl FloatContent for ConfirmQuit {
 
         let text = Paragraph::new("Are you sure you want to exit?\n\n\n[y] Yes              [n] No")
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme.info_color()).add_modifier(Modifier::BOLD))
             .block(block);
 
         frame.render_widget(text, area);
