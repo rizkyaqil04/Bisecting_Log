@@ -5,6 +5,7 @@ mod filter;
 mod float;
 mod gauge;
 mod hint;
+mod loading;
 mod process;
 mod quit;
 mod sort;
@@ -14,8 +15,11 @@ mod theme;
 
 use crate::{
     cli::Args,
+    float::Float,
     gauge::{GaugeState, render_gauge_ui},
+    loading::LoadingFloat,
     state::App,
+    theme::Theme,
 };
 use anyhow::Result;
 use crossterm::{
@@ -24,7 +28,10 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
+use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration as StdDuration;
 use terminal_check::{draw_too_small_warning, is_too_small};
 use tokio::sync::mpsc;
 
@@ -102,7 +109,7 @@ async fn main() -> Result<()> {
                 loop {
                     if let Some(ext) = base.extension() {
                         let ext_s = ext.to_string_lossy().to_lowercase();
-                        if ext_s == "gz" || ext_s == "csv" || ext_s == "txt" {
+                        if ext_s == "gz" || ext_s == "csv" || ext_s == "txt" || ext_s == "parquet" {
                             base.set_extension("");
                             continue;
                         }
@@ -181,7 +188,87 @@ async fn main() -> Result<()> {
     }
 
     // --- main app loop
-    let mut app = App::new(args)?;
+    // Load the table/index in a background thread while showing a loading float
+    let (load_tx, load_rx) = channel();
+    let args_clone = args.clone();
+    let csv_path_clone = csv_path.clone();
+    thread::spawn(move || {
+        // read CSV/GZ/Parquet and build index
+        let t = crate::data::read_csv_or_gz(csv_path_clone.as_path());
+        match t {
+            Ok(table) => {
+                let idx = crate::data::build_cluster_index(&table);
+                match idx {
+                    Ok(index) => {
+                        let _ = load_tx.send(Ok((table, index)));
+                    }
+                    Err(e) => {
+                        let _ = load_tx.send(Err(anyhow::anyhow!(e.to_string())));
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = load_tx.send(Err(anyhow::anyhow!(e.to_string())));
+            }
+        }
+    });
+
+    // show loading popup until data is ready
+    let loaded_app: Option<App>;
+    let loading_float = Float::new_absolute(Box::new(LoadingFloat::new("Loading file...")), 50, 4);
+    let mut loading = loading_float;
+    loop {
+        let size = term.size()?;
+        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        term.draw(|f| {
+            // draw a simple centered loading popup
+            loading.draw(f, area, &Theme::Default);
+        })?;
+
+        // check for loaded data
+        match load_rx.try_recv() {
+            Ok(Ok((table, index))) => {
+                loaded_app = Some(App::from_parts(args_clone, table, index)?);
+                break;
+            }
+            Ok(Err(e)) => {
+                // reading failed - restore terminal and print error
+                disable_raw_mode()?;
+                let backend = term.backend_mut();
+                backend.execute(LeaveAlternateScreen)?;
+                term.show_cursor()?;
+                eprintln!("Failed to load data: {}", e);
+                std::process::exit(1);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // still loading
+            }
+            Err(_) => {
+                // channel disconnected
+                disable_raw_mode()?;
+                let backend = term.backend_mut();
+                backend.execute(LeaveAlternateScreen)?;
+                term.show_cursor()?;
+                eprintln!("Loader thread disconnected");
+                std::process::exit(1);
+            }
+        }
+
+        if crossterm::event::poll(StdDuration::from_millis(50))? {
+            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+                if key.code == crossterm::event::KeyCode::Char('q') {
+                    disable_raw_mode()?;
+                    let backend = term.backend_mut();
+                    backend.execute(LeaveAlternateScreen)?;
+                    term.show_cursor()?;
+                    std::process::exit(0);
+                }
+            }
+        }
+        std::thread::sleep(StdDuration::from_millis(30));
+    }
+
+    let mut app = loaded_app.expect("app must be constructed");
     let res = app.run(&mut term);
 
     // restore terminal

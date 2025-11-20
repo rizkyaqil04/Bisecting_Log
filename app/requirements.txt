@@ -1,6 +1,7 @@
 torch
 numpy
-pandas
+polars
+pyarrow
 scikit-learn
 transformers
 matplotlib

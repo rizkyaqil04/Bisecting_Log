@@ -3,6 +3,7 @@
 import os
 import logging
 import numpy as np
+import polars as pl
 from scipy.sparse import issparse
 
 from .embeddings import generate_url_bert, get_cache_dir
@@ -114,35 +115,43 @@ def save_cluster_outputs(df, labels, out_path, n_clusters, progress_manager: Pro
         progress_manager = ProgressManager(1)
 
     progress_manager.set_status("Attaching labels to DataFrame")
-    df_label = df.copy()
-    df_label["cluster"] = labels
+    df_label = df.clone()
+    df_label = df_label.with_columns(pl.Series("cluster", labels))
 
     base = _strip_known_extensions(out_path)
-    csv_path = f"{base}.csv.gz"
+    parquet_path = f"{base}.parquet"
     txt_path = f"{base}.txt"
 
-    progress_manager.set_status(f"Writing compressed CSV to: {csv_path}")
-    chunk_size = 100_000
-    with open(csv_path, "wb") as f:
-        import gzip
-        with gzip.open(f, "wt", encoding="utf-8", newline="") as gz:
-            df_label.head(0).to_csv(gz, index=False)
-            for i in range(0, len(df_label), chunk_size):
-                df_label.iloc[i:i+chunk_size].to_csv(gz, header=False, index=False)
+    progress_manager.set_status(f"Writing Parquet to: {parquet_path}")
+    # Write the full table as a single Parquet file using Polars
+    try:
+        df_label.write_parquet(parquet_path)
+    except Exception:
+        # fallback via pyarrow if needed
+        df_label.to_arrow().write_parquet(parquet_path)
 
-    progress_manager.set_status(f"Compressed CSV saved: {csv_path}")
+    progress_manager.set_status(f"Parquet saved: {parquet_path}")
 
     progress_manager.set_status(f"Writing text summary: {txt_path}")
-    max_per_cluster = 1000 if len(df_label) > 1_000_000 else None
+    # Create a human-readable summary per cluster
+    try:
+        total_rows = df_label.height
+    except Exception:
+        # fallback
+        total_rows = len(df_label)
+
+    max_per_cluster = 1000 if total_rows > 1_000_000 else None
     with open(txt_path, "w", encoding="utf-8") as f:
         for cluster_id in range(n_clusters):
-            cluster_data = df_label[df_label["cluster"] == cluster_id]
-            f.write(f"\nCluster {cluster_id} ({len(cluster_data)} entries):\n")
+            cluster_data = df_label.filter(pl.col("cluster") == cluster_id)
+            count = cluster_data.height if hasattr(cluster_data, "height") else len(cluster_data)
+            f.write(f"\nCluster {cluster_id} ({count} entries):\n")
             if max_per_cluster:
                 cluster_data = cluster_data.head(max_per_cluster)
                 f.write(f"  [Showing first {max_per_cluster} entries]\n")
-            for _, row in cluster_data.iterrows():
-                f.write(f"  {row['method']} {row['url']} [{row['status']}]\n")
+            # iterate rows as dicts for stable field access
+            for row in cluster_data.to_dicts():
+                f.write(f"  {row.get('method')} {row.get('url')} [{row.get('status')}]\n")
 
     progress_manager.set_status(f"Cluster summaries saved: {txt_path}")
     return
@@ -222,11 +231,11 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     progress.advance(stage_units["read_and_parse"])
 
     progress.set_status("Extracting and tokenizing features (URL, method, status, size, user-agent)")
-    tokenized_urls = [" ".join(split_url_tokens(mask_numbers(url))) for url in df['url']]
-    methods = df['method'].tolist()
-    status_categories = df['status'].apply(categorize_status).tolist()
-    sizes = df['size'].tolist()
-    ua_tokens = [" ".join(tokenize_user_agent(ua)) for ua in df['user_agent']]
+    tokenized_urls = [" ".join(split_url_tokens(mask_numbers(url))) for url in df['url'].to_list()]
+    methods = df['method'].to_list()
+    status_categories = [categorize_status(x) for x in df['status'].to_list()]
+    sizes = df['size'].to_list()
+    ua_tokens = [" ".join(tokenize_user_agent(ua)) for ua in df['user_agent'].to_list()]
     progress.advance(stage_units["extract_and_tokenize"])
 
     progress.set_status("Generating URL embeddings using BERT. It will take some time...")
@@ -314,7 +323,7 @@ def run_clustering(input_path: str, output_path: str, n_clusters: int, sample_fr
     final_features = combine_features(url_embeddings, method_enc, status_enc, size_enc, ua_enc)
 
     if len(df) > 200000 and sample_frac < 1.0:
-        df_sample = df.sample(frac=sample_frac, random_state=42)
+        df_sample = df.sample(frac=sample_frac, seed=42)
         idx = np.sort(df_sample.index.values)
         features_sample = final_features[idx]
     else:

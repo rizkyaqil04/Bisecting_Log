@@ -1,13 +1,14 @@
-use crate::detail::DataDetail;
-use crate::float::{Float, FloatContent};
-use crate::hint::Shortcut;
-use crate::quit::ConfirmQuit;
-use crate::sort::{SortMenu, SortOrder};
-use crate::terminal_check::{draw_too_small_warning, is_too_small};
 use crate::{
     cli::Args,
     data::{ClusterIndex, Table},
+    detail::DataDetail,
     filter::{Filter, SearchAction},
+    float::{Float, FloatContent},
+    hint::Shortcut,
+    loading::LoadingFloat,
+    quit::ConfirmQuit,
+    sort::{SortMenu, SortOrder},
+    terminal_check::{draw_too_small_warning, is_too_small},
     theme::Theme,
 };
 use anyhow::Result;
@@ -17,6 +18,8 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row},
 };
+use std::sync::mpsc::{Receiver, channel};
+use std::thread;
 use std::{path::PathBuf, time::Duration};
 
 const TABLE_PAGE_SIZE: usize = 50;
@@ -24,6 +27,14 @@ const TABLE_PAGE_SIZE: usize = 50;
 pub enum Mode {
     ClusterList,
     ClusterTable,
+}
+
+// LoadingFloat moved to `float.rs` to centralize floating popup implementations
+
+// Message from background filter worker.
+enum FilterResult {
+    ClusterRows(Vec<usize>),
+    Both(Vec<(usize, usize)>, Vec<usize>),
 }
 
 pub struct App {
@@ -45,18 +56,29 @@ pub struct App {
     cluster_list_cache_key: Option<String>,
     cluster_list_cache: Vec<(usize, usize, usize)>,
     input_path: PathBuf,
+    /// Last committed query (set when user presses Enter)
+    committed_query: Option<crate::filter::SearchQuery>,
+    /// Last committed plain term (set when user presses Enter)
+    committed_term: String,
     sort_menu: Option<Float<SortMenu>>,
     current_sort: (String, SortOrder),
     confirm_quit: Option<Float<ConfirmQuit>>,
     detail_float: Option<Float<DataDetail>>,
+    /// Loading float shown while background filtering is running
+    loading_float: Option<Float<LoadingFloat>>,
+    /// Receiver for background filter results
+    filter_result_rx: Option<Receiver<FilterResult>>,
 }
 
 impl App {
-    pub fn new(args: Args) -> Result<Self> {
-        let (_input_log, csv_path) = args.resolve_paths()?;
-        let table = crate::data::read_csv_or_gz(csv_path.as_path())?;
-        let index = crate::data::build_cluster_index(&table)?;
-
+    /// Construct App from pre-loaded `Table` and `ClusterIndex`.
+    /// Useful when the TUI wants to display a loading popup while reading the input
+    /// file in a background thread and then build the App from the loaded data.
+    pub fn from_parts(
+        args: Args,
+        table: crate::data::Table,
+        index: crate::data::ClusterIndex,
+    ) -> Result<Self> {
         let mut list_state = ratatui::widgets::ListState::default();
         let start_sel = 0usize;
         list_state.select(Some(start_sel));
@@ -77,10 +99,14 @@ impl App {
             cluster_list_cache_key: None,
             cluster_list_cache: Vec::new(),
             filter: Filter::default(),
-            input_path: csv_path.clone(),
+            committed_query: None,
+            committed_term: String::new(),
+            input_path: args.resolve_paths()?.1,
             sort_menu: None,
             current_sort: ("ip".into(), SortOrder::Ascend),
             confirm_quit: None,
+            loading_float: None,
+            filter_result_rx: None,
         })
     }
 
@@ -89,6 +115,48 @@ impl App {
         term: &mut Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     ) -> anyhow::Result<()> {
         loop {
+            // Check for background filter results and apply them before rendering
+            if let Some(rx) = &self.filter_result_rx {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        match msg {
+                            FilterResult::Both(counts, rows) => {
+                                // Update cluster_list_cache with full counts and mark scan complete
+                                self.cluster_list_cache.clear();
+                                for (cid, cnt) in counts {
+                                    // find total rows for this cluster to mark scanning done
+                                    let total = self
+                                        .index
+                                        .clusters
+                                        .iter()
+                                        .find(|c| c.id == cid)
+                                        .map(|c| c.rows_idx.len())
+                                        .unwrap_or(0usize);
+                                    self.cluster_list_cache.push((cid, cnt, total));
+                                }
+                                // update cached rows for current cluster and mark which cluster they belong to
+                                self.cached_filtered_rows = rows;
+                                self.cached_cluster_id = self.selected_cluster_id;
+                                // clear loading indicator
+                                self.loading_float = None;
+                                self.filter_result_rx = None;
+                            }
+                            FilterResult::ClusterRows(rows) => {
+                                self.cached_filtered_rows = rows;
+                                self.cached_cluster_id = self.selected_cluster_id;
+                                self.loading_float = None;
+                                self.filter_result_rx = None;
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(_) => {
+                        // disconnected or other error: clear receiver and loading
+                        self.filter_result_rx = None;
+                        self.loading_float = None;
+                    }
+                }
+            }
             term.draw(|f| self.draw(f))?;
             if !event::poll(Duration::from_millis(50))? {
                 continue;
@@ -149,18 +217,135 @@ impl App {
                 .handle_key(&ratatui::crossterm::event::KeyEvent::from(code))
             {
                 SearchAction::Exit => {
+                    // Commit the current query/term and run the background worker to
+                    // recompute cluster counts and (optionally) filtered rows. Do NOT
+                    // switch to ClusterTable here; remain in ClusterList and update
+                    // the visible cluster list when the worker finishes.
+                    let parsed = self.filter.parsed_query();
+                    let term = self.filter.term();
+                    self.committed_query = parsed.clone();
+                    self.committed_term = term.clone();
+
+                    // Deactivate search UI (freeze current screen) and show loading float
                     self.filter.deactivate();
+                    self.loading_float = Some(Float::new_absolute(
+                        Box::new(LoadingFloat::new("Loading data...")),
+                        40,
+                        3,
+                    ));
+
+                    // Prepare background worker inputs
+                    let table_clone = self.table.clone();
+                    let index_clone = self.index.clone();
+                    let headers_clone = self.table.headers.clone();
+
+                    // determine currently-selected cluster id in the visible (filtered)
+                    // cluster list (if any) using the just-committed filter
+                    let sel_cluster_id = self
+                        .list_state
+                        .selected()
+                        .and_then(|idx| self.filtered_clusters().get(idx).map(|(cid, _)| *cid));
+
+                    let (tx, rx) = channel();
+                    self.filter_result_rx = Some(rx);
+
+                    // Move parsed/term into worker
+                    let parsed_move = parsed.clone();
+                    let term_move = term.clone();
+
+                    thread::spawn(move || {
+                        let matches_row = |row: &Vec<String>,
+                                           parsed: &Option<crate::filter::SearchQuery>,
+                                           term: &str|
+                         -> bool {
+                            if let Some(q) = parsed {
+                                q.exprs.iter().all(|expr| {
+                                    if expr.key.is_empty() {
+                                        row.iter().any(|v| {
+                                            v.to_lowercase().contains(&expr.value.to_lowercase())
+                                        })
+                                    } else if let Some(idx) = headers_clone
+                                        .iter()
+                                        .position(|h| h.eq_ignore_ascii_case(&expr.key))
+                                    {
+                                        let val = &row[idx].to_lowercase();
+                                        let val_num = val.parse::<f64>().ok();
+                                        let target_num = expr.value.parse::<f64>().ok();
+                                        match expr.op {
+                                            crate::filter::SearchOp::Eq => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::EqExact => {
+                                                val == &expr.value.to_lowercase()
+                                            }
+                                            crate::filter::SearchOp::NotEq => {
+                                                !val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::Gt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a > b),
+                                            crate::filter::SearchOp::Lt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a < b),
+                                            crate::filter::SearchOp::Ge => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a >= b),
+                                            crate::filter::SearchOp::Le => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a <= b),
+                                            crate::filter::SearchOp::Contains => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                })
+                            } else if term.trim().is_empty() {
+                                true
+                            } else {
+                                row.iter()
+                                    .any(|v| v.to_lowercase().contains(&term.to_lowercase()))
+                            }
+                        };
+
+                        // helper to compute counts per cluster
+                        let mut counts: Vec<(usize, usize)> =
+                            Vec::with_capacity(index_clone.clusters.len());
+                        let mut table_local = table_clone.clone();
+                        for c in &index_clone.clusters {
+                            let mut matched = 0usize;
+                            for &ri in &c.rows_idx {
+                                if let Ok(r) = table_local.get_row(ri) {
+                                    if matches_row(&r, &parsed_move, &term_move) {
+                                        matched += 1;
+                                    }
+                                }
+                            }
+                            counts.push((c.id, matched));
+                        }
+
+                        // Optionally compute filtered rows for selected cluster
+                        let mut rows: Vec<usize> = Vec::new();
+                        if let Some(sid) = sel_cluster_id {
+                            if let Some(c) = index_clone.clusters.iter().find(|cc| cc.id == sid) {
+                                for &ri in &c.rows_idx {
+                                    if let Ok(r) = table_local.get_row(ri) {
+                                        if matches_row(&r, &parsed_move, &term_move) {
+                                            rows.push(ri);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let _ = tx.send(FilterResult::Both(counts, rows));
+                    });
                 }
                 SearchAction::Update => {
-                    // setiap kali teks filter berubah, perbarui fokus agar tetap valid
-                    let filtered = self.filtered_clusters();
-                    if filtered.is_empty() {
-                        self.list_state.select(None);
-                    } else {
-                        let current = self.list_state.selected().unwrap_or(0);
-                        let new_sel = current.min(filtered.len().saturating_sub(1));
-                        self.list_state.select(Some(new_sel));
-                    }
+                    // Do NOT run live filtering on every keystroke. Leave selection unchanged
+                    // until the query is committed with Enter. This freezes the UI while
+                    // the user is typing.
                 }
                 SearchAction::None => {}
             }
@@ -178,7 +363,130 @@ impl App {
             Up | Char('k') => self.move_sel_up(),
             Down | Char('j') => self.move_sel_down(),
             Enter | Right | Char('l') => {
-                // Simpan ID cluster yang dipilih
+                // When user presses Enter while in search, run the query in background
+                // and show a Loading float. Do not perform live updates per keystroke.
+                // Save current search term / parsed query and spawn worker.
+                // Commit the current query and term, then run background worker
+                let parsed = self.filter.parsed_query();
+                let term = self.filter.term();
+                // save as committed query/term so UI is frozen while worker runs
+                self.committed_query = parsed.clone();
+                self.committed_term = term.clone();
+
+                // Deactivate search UI (freeze current screen) and show loading float
+                self.filter.deactivate();
+                self.loading_float = Some(Float::new_absolute(
+                    Box::new(LoadingFloat::new("Loading data...")),
+                    40,
+                    3,
+                ));
+
+                // Prepare background worker inputs
+                let table_clone = self.table.clone();
+                let index_clone = self.index.clone();
+                let headers_clone = self.table.headers.clone();
+                // determine currently-selected cluster id in the visible (filtered) cluster list (if any)
+                let sel_cluster_id = self
+                    .list_state
+                    .selected()
+                    .and_then(|idx| self.filtered_clusters().get(idx).map(|(cid, _)| *cid));
+
+                let (tx, rx) = channel();
+                self.filter_result_rx = Some(rx);
+
+                // Spawn background thread to compute cluster counts and optionally rows for selected cluster
+                thread::spawn(move || {
+                    // helper to test a row against parsed query/term
+                    let matches_row = |row: &Vec<String>,
+                                       parsed: &Option<crate::filter::SearchQuery>,
+                                       term: &str|
+                     -> bool {
+                        if let Some(q) = parsed {
+                            q.exprs.iter().all(|expr| {
+                                if expr.key.is_empty() {
+                                    row.iter().any(|v| {
+                                        v.to_lowercase().contains(&expr.value.to_lowercase())
+                                    })
+                                } else if let Some(idx) = headers_clone
+                                    .iter()
+                                    .position(|h| h.eq_ignore_ascii_case(&expr.key))
+                                {
+                                    let val = &row[idx].to_lowercase();
+                                    let val_num = val.parse::<f64>().ok();
+                                    let target_num = expr.value.parse::<f64>().ok();
+                                    match expr.op {
+                                        crate::filter::SearchOp::Eq => {
+                                            val.contains(&expr.value.to_lowercase())
+                                        }
+                                        crate::filter::SearchOp::EqExact => {
+                                            val == &expr.value.to_lowercase()
+                                        }
+                                        crate::filter::SearchOp::NotEq => {
+                                            !val.contains(&expr.value.to_lowercase())
+                                        }
+                                        crate::filter::SearchOp::Gt => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a > b)
+                                        }
+                                        crate::filter::SearchOp::Lt => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a < b)
+                                        }
+                                        crate::filter::SearchOp::Ge => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a >= b)
+                                        }
+                                        crate::filter::SearchOp::Le => {
+                                            val_num.zip(target_num).map_or(false, |(a, b)| a <= b)
+                                        }
+                                        crate::filter::SearchOp::Contains => {
+                                            val.contains(&expr.value.to_lowercase())
+                                        }
+                                    }
+                                } else {
+                                    false
+                                }
+                            })
+                        } else if term.trim().is_empty() {
+                            true
+                        } else {
+                            row.iter()
+                                .any(|v| v.to_lowercase().contains(&term.to_lowercase()))
+                        }
+                    };
+
+                    // Compute counts per cluster (use local table instance for caching)
+                    let mut counts: Vec<(usize, usize)> =
+                        Vec::with_capacity(index_clone.clusters.len());
+                    let mut table_local = table_clone.clone();
+                    for c in &index_clone.clusters {
+                        let mut matched = 0usize;
+                        for &ri in &c.rows_idx {
+                            if let Ok(r) = table_local.get_row(ri) {
+                                if matches_row(&r, &parsed, &term) {
+                                    matched += 1;
+                                }
+                            }
+                        }
+                        counts.push((c.id, matched));
+                    }
+
+                    // Optionally compute filtered rows for selected cluster
+                    let mut rows: Vec<usize> = Vec::new();
+                    if let Some(sid) = sel_cluster_id {
+                        if let Some(c) = index_clone.clusters.iter().find(|cc| cc.id == sid) {
+                            for &ri in &c.rows_idx {
+                                if let Ok(r) = table_local.get_row(ri) {
+                                    if matches_row(&r, &parsed, &term) {
+                                        rows.push(ri);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // send result back
+                    let _ = tx.send(FilterResult::Both(counts, rows));
+                });
+
+                // switch to table view for selected cluster if user pressed Right/Enter to open
                 if let Some(idx) = self.list_state.selected() {
                     if let Some((cid, _)) = self.filtered_clusters().get(idx) {
                         self.selected_cluster_id = Some(*cid);
@@ -188,7 +496,7 @@ impl App {
                 self.table_scroll = 0;
                 self.table_page = 0;
                 self.table_view_offset = 0;
-                // Invalidate cached filtered rows so table will recompute using current filter/sort
+                // Invalidate cached filtered rows — they'll be replaced when background work completes
                 self.cached_cluster_id = None;
                 self.cached_filtered_rows.clear();
             }
@@ -230,15 +538,108 @@ impl App {
                 .handle_key(&ratatui::crossterm::event::KeyEvent::from(code))
             {
                 crate::filter::SearchAction::Exit => {
+                    // Run query in background (similar to cluster-list flow)
+                    // Commit the current query and term, then run background worker
+                    let parsed = self.filter.parsed_query();
+                    let term = self.filter.term();
+                    self.committed_query = parsed.clone();
+                    self.committed_term = term.clone();
                     self.filter.deactivate();
+                    self.loading_float = Some(Float::new_absolute(
+                        Box::new(LoadingFloat::new("Loading data...")),
+                        40,
+                        3,
+                    ));
+
+                    let table_clone = self.table.clone();
+                    let index_clone = self.index.clone();
+                    let headers_clone = self.table.headers.clone();
+                    // determine currently-selected cluster id in the cluster list (if any)
+                    let sel_cluster_id = self
+                        .selected_cluster_id
+                        .or(self.list_state.selected().and_then(|idx| {
+                            self.filtered_clusters().get(idx).map(|(cid, _)| *cid)
+                        }));
+
+                    let (tx, rx) = channel();
+                    self.filter_result_rx = Some(rx);
+
+                    thread::spawn(move || {
+                        let matches_row = |row: &Vec<String>,
+                                           parsed: &Option<crate::filter::SearchQuery>,
+                                           term: &str|
+                         -> bool {
+                            if let Some(q) = parsed {
+                                q.exprs.iter().all(|expr| {
+                                    if expr.key.is_empty() {
+                                        row.iter().any(|v| {
+                                            v.to_lowercase().contains(&expr.value.to_lowercase())
+                                        })
+                                    } else if let Some(idx) = headers_clone
+                                        .iter()
+                                        .position(|h| h.eq_ignore_ascii_case(&expr.key))
+                                    {
+                                        let val = &row[idx].to_lowercase();
+                                        let val_num = val.parse::<f64>().ok();
+                                        let target_num = expr.value.parse::<f64>().ok();
+                                        match expr.op {
+                                            crate::filter::SearchOp::Eq => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::EqExact => {
+                                                val == &expr.value.to_lowercase()
+                                            }
+                                            crate::filter::SearchOp::NotEq => {
+                                                !val.contains(&expr.value.to_lowercase())
+                                            }
+                                            crate::filter::SearchOp::Gt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a > b),
+                                            crate::filter::SearchOp::Lt => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a < b),
+                                            crate::filter::SearchOp::Ge => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a >= b),
+                                            crate::filter::SearchOp::Le => val_num
+                                                .zip(target_num)
+                                                .map_or(false, |(a, b)| a <= b),
+                                            crate::filter::SearchOp::Contains => {
+                                                val.contains(&expr.value.to_lowercase())
+                                            }
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                })
+                            } else if term.trim().is_empty() {
+                                true
+                            } else {
+                                row.iter()
+                                    .any(|v| v.to_lowercase().contains(&term.to_lowercase()))
+                            }
+                        };
+
+                        let mut rows: Vec<usize> = Vec::new();
+                        if let Some(sid) = sel_cluster_id {
+                            if let Some(c) = index_clone.clusters.iter().find(|cc| cc.id == sid) {
+                                let mut table_local = table_clone.clone();
+                                for &ri in &c.rows_idx {
+                                    if let Ok(r) = table_local.get_row(ri) {
+                                        if matches_row(&r, &parsed, &term) {
+                                            rows.push(ri);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let _ = tx.send(FilterResult::ClusterRows(rows));
+                    });
                 }
                 crate::filter::SearchAction::Update => {
-                    // When filter text changes, invalidate the cached filtered rows
-                    self.cached_cluster_id = None;
-                    self.cached_filtered_rows.clear();
-                    self.table_page = 0;
-                    self.table_scroll = 0;
-                    self.table_view_offset = 0;
+                    // Do NOT invalidate or re-run query while the user is typing.
+                    // The committed results will be updated when Enter is pressed.
                 }
                 crate::filter::SearchAction::None => {}
             }
@@ -459,6 +860,11 @@ impl App {
         if let Some(ref mut float) = self.detail_float {
             float.draw(f, f.area(), &self.theme);
         }
+
+        // Draw loading float (highest priority) if present
+        if let Some(ref mut float) = self.loading_float {
+            float.draw(f, f.area(), &self.theme);
+        }
     }
 
     fn mode_name(&self) -> &str {
@@ -470,8 +876,11 @@ impl App {
 
     fn filtered_clusters(&mut self) -> Vec<(usize, usize)> {
         // Incremental cached cluster counting for ClusterList to avoid scanning entire dataset
-        let query = self.filter.parsed_query(); // ambil beberapa ekspresi terstruktur
-        let term = self.filter.term().to_lowercase();
+        // Use last committed query/term (committed when user pressed Enter).
+        // While the search bar is active, we must NOT perform live updates —
+        // instead return the current cached cluster counts to freeze the UI.
+        let query = self.committed_query.clone();
+        let term = self.committed_term.to_lowercase();
 
         // If no filter, return exact counts cheaply
         if query.is_none() && term.is_empty() {
@@ -495,7 +904,27 @@ impl App {
             }
         }
 
-        // Helper to test a row against current query/term
+        // If the search is currently active (user is typing), freeze results and
+        // return the cached cluster counts rather than scanning.
+        if self.filter.active() {
+            if !self.cluster_list_cache.is_empty() {
+                return self
+                    .cluster_list_cache
+                    .iter()
+                    .filter(|(_, cnt, _)| *cnt > 0)
+                    .map(|(id, cnt, _)| (*id, *cnt))
+                    .collect();
+            } else {
+                return self
+                    .index
+                    .clusters
+                    .iter()
+                    .map(|c| (c.id, c.rows_idx.len()))
+                    .collect::<Vec<_>>();
+            }
+        }
+
+        // Helper to test a row against current committed query/term
         let headers = self.table.headers.clone();
         let matches_row = |row: &Vec<String>| -> bool {
             if let Some(ref q) = query {
@@ -503,7 +932,10 @@ impl App {
                     if expr.key.is_empty() {
                         row.iter()
                             .any(|v| v.to_lowercase().contains(&expr.value.to_lowercase()))
-                    } else if let Some(idx) = headers.iter().position(|h| h == &expr.key) {
+                    } else if let Some(idx) = headers
+                        .iter()
+                        .position(|h| h.eq_ignore_ascii_case(&expr.key))
+                    {
                         let val = &row[idx].to_lowercase();
                         let val_num = val.parse::<f64>().ok();
                         let target_num = expr.value.parse::<f64>().ok();
@@ -579,8 +1011,8 @@ impl App {
         let items = self
             .filtered_clusters()
             .iter()
-            .map(|(id, n)| {
-                let s = format!("Cluster {} ({} entries)", id, n);
+            .map(|(id, _n)| {
+                let s = format!("Cluster {}", id);
                 ListItem::new(s).style(Style::default().fg(self.theme.cluster_color()))
             })
             .collect::<Vec<_>>();
@@ -602,10 +1034,12 @@ impl App {
     fn draw_preview(&mut self, f: &mut Frame, area: Rect) {
         // tampilkan beberapa baris dari cluster terpilih, TERFILTER oleh search
         let filtered = self.filtered_clusters();
-        let idx = self.list_state.selected().unwrap_or(0);
+        let sel_idx = self.list_state.selected().unwrap_or(0);
         let mut lines = Vec::new();
 
         if !filtered.is_empty() {
+            // Clamp selected index into visible filtered list
+            let idx = sel_idx.min(filtered.len().saturating_sub(1));
             let cluster_id = filtered[idx].0;
             if let Some(c) = self.index.clusters.iter().find(|c| c.id == cluster_id) {
                 // Judul preview
@@ -617,9 +1051,17 @@ impl App {
                     ),
                 );
 
-                // Gunakan parsed_query agar mendukung advanced search (key op value)
-                let query = self.filter.parsed_query();
-                let term = self.filter.term().to_lowercase();
+                // Use committed query/term when the search bar is active so preview doesn't live-update.
+                let query = if self.filter.active() {
+                    self.committed_query.clone()
+                } else {
+                    self.filter.parsed_query()
+                };
+                let term = if self.filter.active() {
+                    self.committed_term.to_lowercase()
+                } else {
+                    self.filter.term().to_lowercase()
+                };
 
                 let mut filtered_rows: Vec<usize> = Vec::new();
                 if term.is_empty() && query.is_none() {
@@ -634,8 +1076,11 @@ impl App {
                                         row.iter().any(|v| {
                                             v.to_lowercase().contains(&expr.value.to_lowercase())
                                         })
-                                    } else if let Some(idx) =
-                                        self.table.headers.iter().position(|h| h == &expr.key)
+                                    } else if let Some(idx) = self
+                                        .table
+                                        .headers
+                                        .iter()
+                                        .position(|h| h.eq_ignore_ascii_case(&expr.key))
                                     {
                                         let val = &row[idx].to_lowercase();
                                         let val_num = val.parse::<f64>().ok();
@@ -795,8 +1240,17 @@ impl App {
             if self.cached_cluster_id != Some(cluster_id) {
                 // Recompute filtered rows (full scan) and cache the result.
                 self.cached_filtered_rows.clear();
-                let query = self.filter.parsed_query();
-                let term = self.filter.term().to_lowercase();
+                // Use committed query/term while search is active so table does not live-update
+                let query = if self.filter.active() {
+                    self.committed_query.clone()
+                } else {
+                    self.filter.parsed_query()
+                };
+                let term = if self.filter.active() {
+                    self.committed_term.to_lowercase()
+                } else {
+                    self.filter.term().to_lowercase()
+                };
                 for &ri in &c.rows_idx {
                     if let Ok(row) = self.table.get_row(ri) {
                         let ok = if let Some(ref q) = query {
@@ -805,8 +1259,11 @@ impl App {
                                     row.iter().any(|v| {
                                         v.to_lowercase().contains(&expr.value.to_lowercase())
                                     })
-                                } else if let Some(idx) =
-                                    self.table.headers.iter().position(|h| h == &expr.key)
+                                } else if let Some(idx) = self
+                                    .table
+                                    .headers
+                                    .iter()
+                                    .position(|h| h.eq_ignore_ascii_case(&expr.key))
                                 {
                                     let val = &row[idx].to_lowercase();
                                     let val_num = val.parse::<f64>().ok();

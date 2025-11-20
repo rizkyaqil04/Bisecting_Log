@@ -104,7 +104,7 @@ target
 inputs/*
 !inputs/sample.log
 outputs/*
-!outputs/sample.csv.gz
+!outputs/sample.parquet
 !outputs/sample.txt
 *.pkl
 

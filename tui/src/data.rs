@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use flate2::read::GzDecoder;
+use polars::prelude::SerReader;
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::{
@@ -108,9 +109,51 @@ pub struct Cluster {
 
 pub fn read_csv_or_gz(path: &Path) -> Result<Table> {
     let mut is_gz = false;
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+    let ext_opt = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
+    if let Some(ext) = ext_opt.as_deref() {
         if ext.eq_ignore_ascii_case("gz") {
             is_gz = true;
+        }
+    }
+
+    // If path is .parquet -> load with Polars (load fully into memory)
+    if let Some(ext) = ext_opt.as_deref() {
+        if ext == "parquet" {
+            let f = File::open(path)?;
+            let buf = BufReader::new(f);
+            let df = polars::io::parquet::ParquetReader::new(buf).finish()?;
+            let headers = df
+                .get_column_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            let mut rows = Vec::new();
+            let height = df.height();
+            let cols = df.get_columns();
+            for i in 0..height {
+                let mut row = Vec::with_capacity(cols.len());
+                for col in cols.iter() {
+                    let val_res = col.get(i);
+                    let s = match val_res {
+                        Ok(av) => format!("{}", av),
+                        Err(_) => String::new(),
+                    };
+                    row.push(s);
+                }
+                rows.push(row);
+            }
+            return Ok(Table {
+                headers,
+                rows: Some(rows),
+                path: Some(path.to_path_buf()),
+                is_gz: false,
+                total_rows: height,
+                page_cache_start: None,
+                page_cache: None,
+            });
         }
     }
 

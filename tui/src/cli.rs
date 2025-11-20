@@ -13,7 +13,7 @@ pub struct Args {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Path to the clustering result file (.csv or .csv.gz)
+    /// Path to the clustering result file (.csv, .csv.gz, or .parquet)
     #[arg(short = 'r', long)]
     pub read: Option<PathBuf>,
 
@@ -58,7 +58,7 @@ impl Args {
                 let output_path = if let Some(out) = &self.output {
                     out.clone()
                 } else {
-                    PathBuf::from(format!("./outputs/{file_name}.csv.gz"))
+                    PathBuf::from(format!("./outputs/{file_name}.parquet"))
                 };
 
                 Ok((Some(input_path.clone()), output_path))
@@ -72,9 +72,9 @@ impl Args {
                     .unwrap_or("")
                     .to_lowercase();
 
-                if !["csv", "gz"].contains(&ext.as_str()) {
+                if !["csv", "gz", "parquet"].contains(&ext.as_str()) {
                     bail!(
-                        "{} --read must be a .csv or .csv.gz file (found .{})",
+                        "{} --read must be a .csv, .csv.gz, or .parquet file (found .{})",
                         "[ERROR]".red().bold(),
                         ext
                     );

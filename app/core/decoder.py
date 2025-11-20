@@ -5,7 +5,7 @@ import re
 import codecs
 import urllib.parse
 import base64
-import pandas as pd
+import polars as pl
 from .bot import is_valid_bot
 
 log_pattern = re.compile(
@@ -92,10 +92,20 @@ def parse_dec_file_to_dataframe(in_path):
             fields['no'] = no
             records.append(fields)
 
-    df = pd.DataFrame(records)
-    df['time'] = pd.to_datetime(df['time'], format='%d/%b/%Y:%H:%M:%S %z', errors='coerce', utc=True)
-    df['status'] = df['status'].astype(int)
-    df['size'] = df['size'].astype(int)
+    df = pl.DataFrame(records)
+    # Parse time column into datetime where possible
+    try:
+        df = df.with_columns(
+            pl.col('time').str.strptime(pl.Datetime, fmt='%d/%b/%Y:%H:%M:%S %z', strict=False).alias('time')
+        )
+    except Exception:
+        # Fallback: keep as string if parsing fails
+        pass
+
+    df = df.with_columns([
+        pl.col('status').cast(pl.Int32),
+        pl.col('size').cast(pl.Int32),
+    ])
     return df
 
 
@@ -111,5 +121,17 @@ def parse_dec_file(in_path, out_path):
 
 
 def parse_dec_file_to_csv(in_path, out_path):
+    # Backwards-compatible API: write clustering/parsing output as Parquet using Polars
     df = parse_dec_file_to_dataframe(in_path)
-    df.to_csv(out_path, index=False)
+    # Ensure parent dir exists
+    parent = os.path.dirname(out_path)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent, exist_ok=True)
+    # Write parquet (replace previous CSV behavior)
+    try:
+        df.write_parquet(out_path)
+    except Exception:
+        # If a .csv path was provided, replace extension with .parquet
+        base, _ = os.path.splitext(out_path)
+        pq_path = f"{base}.parquet"
+        df.write_parquet(pq_path)
